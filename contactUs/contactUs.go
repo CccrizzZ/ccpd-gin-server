@@ -3,73 +3,79 @@ package contactUs
 import (
 	"context"
 	"fmt"
-	"io"
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
-	
+
 type ContactUsForm struct {
-    name string
-    email  string
-	msg string
-	time string
-	invoice int
+    FirstName string `json:"firstname" binding:"required"`
+    LastName string `json:"lastname" binding:"required"`
+    Phone  string `json:"phone" binding:"required"`
+    Email  string `json:"email" binding:"required"`
+	Invoice string `json:"invoice" binding:"required"`
+	Lot string `json:"lot" binding:"required"`
+	Reason string `json:"reason" binding:"required"`
+	Message string `json:"message" binding:"required"`
+	Time string `json:"time" binding:"required"`
+}
+
+type Response struct {
+    Code    int    `json:"code"`
+    Message string `json:"message"`
 }
 
 func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
-
-		// get and destruct json form body
-		jsonData, err := io.ReadAll(c.Request.Body)
-		if err != nil {
-			fmt.Printf("Invalid Body")
-		}
-
-		// json data mapping to struct
-		newForm := ContactUsForm{
-			"Chris",
-			"xxx@gamil.com",
-			"Please issue me a refund, the goods are faulty",
-			time.Now().Format("RFC1123Z"),
-			123123,
-		}
-		fmt.Println(newForm)
-
-		var result bson.M
-		findMsg := collection.FindOne(context.TODO(), bson.D{{}}).Decode(&result)
-		if findMsg == mongo.ErrNoDocuments {
-			fmt.Println("No document found")
+		// bind incoming json to struct
+		var newFormObj ContactUsForm
+		bindErr := c.ShouldBindJSON(&newFormObj)
+		if bindErr != nil {
+			c.String(http.StatusBadRequest, "Cannot Bind JSON, Request Must Match Schema")
 			return
 		}
+
+		// generate EST time
+		currTime, err := time.LoadLocation("America/New_York")
 		if err != nil {
-			panic(err)
+			c.String(http.StatusInternalServerError,  "Cannot Get Eastern Standard Time")
+			return
 		}
+		fmt.Println(newFormObj)
+		fmt.Println(currTime)
+		newFormObj.Time = time.Now().Format("Jan 02 2024")
+		
+		// insert into mongo
+		insertMsg, err := collection.InsertOne(context.TODO(), newFormObj)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Insert Msg Into Database"})
+			return
+		}
+		fmt.Println(insertMsg)
+
 		// return json data
-		c.JSON(200, jsonData)
+		c.JSON(http.StatusOK, gin.H{"data": "Successfully Submitted Form"})
 	}
 }
 
 func GetContactForm(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		fmt.Println(time.Now().Format("RFC1123Z"))
-		
+		fmt.Println(time.Now())
+
 		// invoke mongo db
 		var result bson.M
-		// err := collection.FindOne(context.TODO(), bson.D{{
-		// 	"name",
-		// 	"Christopher Liu",
-		// }}).Decode(&result)
-		// if err == mongo.ErrNoDocuments {
-		// 	fmt.Println("No document found")
-		// 	return
-		// }
-		// if err != nil {
-		// 	panic(err)
-		// }
-
+		err := collection.FindOne(context.TODO(), bson.D{primitive.E{ Key: "name", Value: "Christopher Liu" }}).Decode(&result)
+		if err == mongo.ErrNoDocuments {
+			fmt.Println("No document found")
+			return
+		}
+		if err != nil {
+			fmt.Println(err)
+		}
 
 		c.JSON(200, result) 
     }
