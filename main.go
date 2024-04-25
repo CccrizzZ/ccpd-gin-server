@@ -6,7 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/cccrizzz/ccpd-gin-server/contactUs"
+	"github.com/cccrizzz/ccpd-gin-server/pkg/contact"
+	"github.com/cccrizzz/ccpd-gin-server/pkg/whitelist"
+
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -15,9 +17,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// Mongo DB
 var mongoClient *mongo.Client
 func initMongo() {
-	// connect mongo db
 	uri := os.Getenv("MONGO_CONN")
 	if uri == "" {
 		log.Fatal("Environment variable not found.")
@@ -29,26 +31,32 @@ func initMongo() {
 	mongoClient = client
 }
 
+// IP whitelist
+var IPList = map[string]bool{
+	"127.0.0.1": true,
+}
+
 func main() {
 	// load dotenv
-	err := godotenv.Load()
-	if err != nil {
-	  log.Fatal("Cannot find .env file")
-	}
+	godotenv.Load()
 
 	// call init mongo and create collection object
 	initMongo()
 	contactMessegesCollection := mongoClient.Database("CCPD").Collection("ContactMesseges")
 	
 	// active release mode
-	// gin.SetMode(gin.ReleaseMode)
+	if os.Getenv("MODE") == "" {
+		gin.SetMode(gin.DebugMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	r := gin.Default()
 	
 	// throttle middleware
 	maxEventsPerSec := 10
 	maxBurstSize := 2
 	r.Use(middleware.Throttle(maxEventsPerSec, maxBurstSize))
-
+	r.Use(whitelist.IPWhiteListMiddleware(IPList))
 	// cors middleware
 	r.Use(cors.New(cors.Config{
         AllowOrigins:     []string{"*"},
@@ -62,23 +70,7 @@ func main() {
         MaxAge: 12 * time.Hour,
     }))
 
-	r.POST("/submitContactForm", contactUs.SubmitContactForm(contactMessegesCollection))
-	r.GET("/getContactForm", contactUs.GetContactForm(contactMessegesCollection))
+	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
+	r.POST("/getContactFormByPage", contact.GetContactFormByPage(contactMessegesCollection))
 	r.Run(":3000")
 }
-
-// func CORSMiddleware() gin.HandlerFunc {
-//     return func(c *gin.Context) {
-//         c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-//         c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-//         c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-//         c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
-
-//         if c.Request.Method == "OPTIONS" {
-//             c.AbortWithStatus(204)
-//             return
-//         }
-
-//         c.Next()
-//     }
-// }
