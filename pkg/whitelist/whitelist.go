@@ -11,8 +11,8 @@ func IPWhiteListMiddleware(whitelist map[string]bool) gin.HandlerFunc {
 		ip := c.ClientIP()
 
 		if !whitelist[ip] {
-			c.IndentedJSON(http.StatusForbidden, gin.H{
-				"message": "You are not authorised to use this endpoint",
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"data": "You are not authorised to use this endpoint",
 			})
 			return
 		}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/cccrizzz/ccpd-gin-server/pkg/appointment"
 	"github.com/cccrizzz/ccpd-gin-server/pkg/contact"
 	"github.com/cccrizzz/ccpd-gin-server/pkg/whitelist"
 
@@ -19,6 +20,7 @@ import (
 
 // Mongo DB
 var mongoClient *mongo.Client
+
 func initMongo() {
 	uri := os.Getenv("MONGO_CONN")
 	if uri == "" {
@@ -43,34 +45,37 @@ func main() {
 	// call init mongo and create collection object
 	initMongo()
 	contactMessegesCollection := mongoClient.Database("CCPD").Collection("ContactMesseges")
-	
+	appointmentLinksCollection := mongoClient.Database("CCPD").Collection("AppointmentLinks")
+
 	// active release mode
-	if os.Getenv("MODE") == "" {
+	if os.Getenv("MODE") == "" || os.Getenv("MODE") == "DEBUG" {
 		gin.SetMode(gin.DebugMode)
 	} else {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.Default()
-	
 	// throttle middleware
 	maxEventsPerSec := 10
 	maxBurstSize := 2
 	r.Use(middleware.Throttle(maxEventsPerSec, maxBurstSize))
+	// ip whitelist middleware
 	r.Use(whitelist.IPWhiteListMiddleware(IPList))
 	// cors middleware
 	r.Use(cors.New(cors.Config{
-        AllowOrigins:     []string{"*"},
-        AllowMethods:     []string{"PUT", "PATCH", "OPTION", "GET", "POST"},
-        AllowHeaders:     []string{"*"},
-        ExposeHeaders:    []string{"Content-Length"},
-        AllowCredentials: true,
-        AllowOriginFunc: func(origin string) bool {
-            return origin == "*"
-        },
-        MaxAge: 12 * time.Hour,
-    }))
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"PUT", "PATCH", "OPTION", "GET", "POST"},
+		AllowHeaders:     []string{"*"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		AllowOriginFunc: func(origin string) bool {
+			return origin == "*"
+		},
+		MaxAge: 12 * time.Hour,
+	}))
 
 	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
 	r.POST("/getContactFormByPage", contact.GetContactFormByPage(contactMessegesCollection))
+	r.GET("/getAppointmentLink", appointment.GetAppointmentLink(appointmentLinksCollection))
+	r.POST("/setAppointmentLink", appointment.SetAppointmentLink(appointmentLinksCollection))
 	r.Run(":3000")
 }

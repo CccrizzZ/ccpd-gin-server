@@ -9,26 +9,27 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type ContactUsForm struct {
-    FirstName string `json:"firstname" binding:"required" validate:"required"`
-    LastName string `json:"lastname" binding:"required" validate:"required"`
-    Phone  string `json:"phone" binding:"required" validate:"required"`
-    Email  string `json:"email" binding:"required" validate:"required"`
-	Invoice string `json:"invoice" binding:"required" validate:"required"`
-	Lot string `json:"lot" binding:"required" validate:"required"`
-	Reason string `json:"reason" binding:"required" validate:"required"`
-	Message string `json:"message" binding:"required" validate:"required"`
-	Time string `json:"time"`
-	IP string `json:"ip"`
+	FirstName string `json:"firstname" binding:"required" validate:"required"`
+	LastName  string `json:"lastname" binding:"required" validate:"required"`
+	Phone     string `json:"phone" binding:"required" validate:"required"`
+	Email     string `json:"email" binding:"required" validate:"required"`
+	Invoice   string `json:"invoice" binding:"required" validate:"required"`
+	Lot       string `json:"lot" binding:"required" validate:"required"`
+	Reason    string `json:"reason" binding:"required" validate:"required"`
+	Message   string `json:"message" binding:"required" validate:"required"`
+	Time      string `json:"time"`
+	IP        string `json:"ip"`
 }
 
 type Response struct {
-    Code    int    `json:"code"`
-    Message string `json:"message"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }
 
 // validator v10
@@ -43,17 +44,17 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 			c.String(http.StatusBadRequest, "Please Check Your Form Inputs!")
 			return
 		}
-		
+
 		// validate with validtor
-        if err := validate.Struct(newFormObj); err != nil {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "Validation error: " + err.Error()})
-            return
-        }
+		if err := validate.Struct(newFormObj); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Validation error: " + err.Error()})
+			return
+		}
 
 		// generate and set EST time
 		currTime, err := time.LoadLocation("America/New_York")
 		if err != nil {
-			c.String(http.StatusInternalServerError,  "Cannot Get Eastern Standard Time")
+			c.String(http.StatusInternalServerError, "Cannot Get Eastern Standard Time")
 			return
 		}
 		newFormObj.Time = time.Now().In(currTime).Format(time.UnixDate)
@@ -74,13 +75,13 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 }
 
 type ByPageRequest struct {
-	CurrPage *int `json:"currPage" binding:"required" validate:"required"`
+	CurrPage     *int `json:"currPage" binding:"required" validate:"required"`
 	ItemsPerPage *int `json:"itemsPerPage" binding:"required" validate:"required"`
 }
 
 type PaginationResponse struct {
-	Data       []ContactUsForm `json:"data"`
-	TotalItems int64        `json:"totalItems"`
+	Data       []primitive.M `json:"data"`
+	TotalItems int64         `json:"totalItems"`
 }
 
 func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
@@ -93,17 +94,17 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 			c.String(http.StatusBadRequest, "Please Check Your Inputs!")
 			return
 		}
-		
+
 		// pull pagination data
 		currPage := *body.CurrPage
 		itemsPerPage := *body.ItemsPerPage
 		limit := currPage * itemsPerPage
 
 		// validate with validtor
-        if err := validate.Struct(body); err != nil {
-            c.JSON(http.StatusBadRequest, gin.H{"error": "Validation error: " + err.Error()})
-            return
-        }
+		if err := validate.Struct(body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Validation error: " + err.Error()})
+			return
+		}
 
 		// construct filter
 		fil := options.Find()
@@ -112,9 +113,7 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 		fil.SetSkip(int64(skip))
 		fil.SetLimit(int64(limit))
 
-
 		// invoke mongo db
-		// res := PaginationResponse{}
 		cursor, err := collection.Find(ctx, bson.M{}, fil)
 		if err == mongo.ErrNoDocuments {
 			c.String(http.StatusBadRequest, "No Documents Found!")
@@ -132,27 +131,23 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 			var result bson.M
 			err := cursor.Decode(&result)
 			if err != nil {
-				// return nil, err
+				c.String(http.StatusInternalServerError, "Database Error!")
 			}
 			results = append(results, result)
 		}
 
-		// err = cursor.All(ctx, &results)
-		// if err != nil {
-		// 	c.String(http.StatusInternalServerError, "Database Error!")
-		// }
-		// fmt.Println(results)
-		
-		
 		// Get total documents
-		// total, err := collection.CountDocuments(ctx, fil)
-		// if err != nil {
-		// 	c.String(http.StatusBadRequest, "No Documents Found!")
-		// 	return
-		// }
-		// res.TotalItems = total
+		total, err := collection.CountDocuments(ctx, options.FindOptions{})
+		if err != nil {
+			c.String(http.StatusBadRequest, "No Documents Found!")
+			return
+		}
 
- 
-		c.JSON(200, results) 
-    }
+		response := PaginationResponse{
+			Data:       results,
+			TotalItems: total,
+		}
+
+		c.JSON(200, response)
+	}
 }
