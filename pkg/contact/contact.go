@@ -25,6 +25,7 @@ type ContactUsForm struct {
 	Message   string `json:"message" binding:"required" validate:"required"`
 	Time      string `json:"time"`
 	IP        string `json:"ip"`
+	Replied   bool   `json:"replied"`
 }
 
 type Response struct {
@@ -60,6 +61,7 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 		newFormObj.Time = time.Now().In(currTime).Format(time.UnixDate)
 		fmt.Println(newFormObj)
 		newFormObj.IP = c.ClientIP()
+		newFormObj.Replied = false
 
 		// insert into mongo
 		insertMsg, err := collection.InsertOne(context.TODO(), newFormObj)
@@ -91,14 +93,10 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 		var body ByPageRequest
 		bindErr := c.ShouldBindJSON(&body)
 		if bindErr != nil {
+			fmt.Println(bindErr.Error())
 			c.String(http.StatusBadRequest, "Please Check Your Inputs!")
 			return
 		}
-
-		// pull pagination data
-		currPage := *body.CurrPage
-		itemsPerPage := *body.ItemsPerPage
-		limit := currPage * itemsPerPage
 
 		// validate with validtor
 		if err := validate.Struct(body); err != nil {
@@ -107,11 +105,13 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 		}
 
 		// construct filter
+		currPage := *body.CurrPage
+		itemsPerPage := *body.ItemsPerPage
 		fil := options.Find()
-		fil.SetSort(bson.D{{Key: "time", Value: -1}})
-		skip := (currPage - 1) * limit
+		skip := currPage * itemsPerPage
 		fil.SetSkip(int64(skip))
-		fil.SetLimit(int64(limit))
+		fil.SetLimit(int64(itemsPerPage))
+		fil.SetSort(bson.D{{Key: "time", Value: -1}})
 
 		// invoke mongo db
 		cursor, err := collection.Find(ctx, bson.M{}, fil)
@@ -149,5 +149,47 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 		}
 
 		c.JSON(200, response)
+	}
+}
+
+type setRepliedRequest struct {
+	Email   string `json:"email" binding:"required" validate:"required"`
+	Time    string `json:"time" binding:"required" validate:"required"`
+	Replied bool   `json:"replied" binding:"required" validate:"required"`
+}
+
+func SetContactFormReplied(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.TODO()
+		// bind body to JSON
+		var body setRepliedRequest
+		bindErr := c.ShouldBindJSON(&body)
+		if bindErr != nil {
+			fmt.Println(bindErr.Error())
+			c.String(http.StatusBadRequest, "Please Check Your Inputs!")
+			return
+		}
+
+		// validate with validtor
+		if err := validate.Struct(body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"data": "Validation error: " + err.Error()})
+			return
+		}
+
+		// update to mongo db
+		insertMsg, err := collection.UpdateOne(
+			ctx,
+			bson.M{"email": body.Email, "time": body.Time},
+			bson.M{"$set": bson.M{"replied": true}},
+		)
+		if err != nil {
+			fmt.Println(err.Error())
+
+			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Update Database!"})
+			return
+		}
+		fmt.Println(insertMsg)
+
+		c.String(http.StatusOK, "Message Status Updated!")
 	}
 }

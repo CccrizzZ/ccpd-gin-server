@@ -25,4 +25,5 @@
 LICENSE
 README.md
 
+*.exe
 env

@@ -23,15 +23,18 @@ func GetAppointmentLink(collection *mongo.Collection) gin.HandlerFunc {
 		// query options
 		opts := options.FindOne().SetSort(bson.D{{Key: "time", Value: -1}})
 
-		// pull from mongo
+		// pull settings from mongo
 		var result bson.M
-		err := collection.FindOne(context.TODO(), nil, opts).Decode(&result)
+		err := collection.FindOne(
+			context.TODO(),
+			bson.M{"type": "setting"},
+			opts,
+		).Decode(&result)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"data": "Item Not Found!"})
 			return
 		}
-
-		c.JSON(http.StatusAccepted, result)
+		c.JSON(http.StatusOK, result)
 	}
 }
 
@@ -52,7 +55,7 @@ func SetAppointmentLink(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
-		// push to mongo
+		// insert to mongo
 		insertMsg, err := collection.InsertOne(
 			ctx,
 			bson.M{
@@ -66,14 +69,17 @@ func SetAppointmentLink(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
+		// update current lot
 		setMsg, err := collection.UpdateOne(
 			ctx,
-			bson.M{"type": "setting"}, bson.M{"$set": bson.M{"currentLot": request.Lot, "currentLink": request.Link}})
+			bson.M{"type": "setting"},
+			bson.M{"$set": bson.M{"currentLot": request.Lot, "currentLink": request.Link}},
+		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Update Document"})
 			return
 		}
 
-		c.JSON(200, setMsg)
+		c.JSON(http.StatusOK, setMsg)
 	}
 }

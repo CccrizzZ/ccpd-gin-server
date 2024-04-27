@@ -35,7 +35,8 @@ func initMongo() {
 
 // IP whitelist
 var IPList = map[string]bool{
-	"127.0.0.1": true,
+	"127.0.0.1":      true,
+	"142.114.216.52": true,
 }
 
 func main() {
@@ -73,8 +74,12 @@ func main() {
 		MaxAge: 12 * time.Hour,
 	}))
 
+	// contact form
 	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
 	r.POST("/getContactFormByPage", contact.GetContactFormByPage(contactMessegesCollection))
+	r.POST("/setContactFormReplied", contact.SetContactFormReplied(contactMessegesCollection))
+
+	// appointment links
 	r.GET("/getAppointmentLink", appointment.GetAppointmentLink(appointmentLinksCollection))
 	r.POST("/setAppointmentLink", appointment.SetAppointmentLink(appointmentLinksCollection))
 	r.Run(":3000")
