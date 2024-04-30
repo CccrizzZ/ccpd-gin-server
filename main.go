@@ -8,7 +8,7 @@ import (
 
 	"github.com/cccrizzz/ccpd-gin-server/pkg/appointment"
 	"github.com/cccrizzz/ccpd-gin-server/pkg/contact"
-	"github.com/cccrizzz/ccpd-gin-server/pkg/whitelist"
+	auth "github.com/cccrizzz/ccpd-gin-server/pkg/firebase"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -54,13 +54,31 @@ func main() {
 	} else {
 		gin.SetMode(gin.ReleaseMode)
 	}
+
+	// create router
 	r := gin.Default()
+
+	// Initialize Firebase auth client once
+	firebaseApp, err := auth.InitFirebase()
+	if err != nil {
+		log.Fatalf("Failed to initialize Firebase: %v", err)
+	}
+
+	// get firebase auth client
+	firebaseAuthClient, err := firebaseApp.Auth(context.Background())
+	if err != nil {
+		log.Fatalf("Failed to get Firebase auth client: %v", err)
+	}
+	r.Use(auth.FirebaseAuthMiddleware(firebaseAuthClient))
+
 	// throttle middleware
 	maxEventsPerSec := 10
-	maxBurstSize := 2
+	maxBurstSize := 5
 	r.Use(middleware.Throttle(maxEventsPerSec, maxBurstSize))
+
 	// ip whitelist middleware
-	r.Use(whitelist.IPWhiteListMiddleware(IPList))
+	// r.Use(whitelist.IPWhiteListMiddleware(IPList))
+
 	// cors middleware
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
