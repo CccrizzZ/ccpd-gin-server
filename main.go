@@ -43,7 +43,7 @@ func main() {
 	// load dotenv
 	godotenv.Load()
 
-	// call init mongo and create collection object
+	// mongodb collections
 	initMongo()
 	contactMessegesCollection := mongoClient.Database("CCPD").Collection("ContactMesseges")
 	appointmentLinksCollection := mongoClient.Database("CCPD").Collection("AppointmentLinks")
@@ -58,19 +58,6 @@ func main() {
 	// create router
 	r := gin.Default()
 
-	// Initialize Firebase auth client once
-	firebaseApp, err := auth.InitFirebase()
-	if err != nil {
-		log.Fatalf("Failed to initialize Firebase: %v", err)
-	}
-
-	// get firebase auth client
-	firebaseAuthClient, err := firebaseApp.Auth(context.Background())
-	if err != nil {
-		log.Fatalf("Failed to get Firebase auth client: %v", err)
-	}
-	r.Use(auth.FirebaseAuthMiddleware(firebaseAuthClient))
-
 	// throttle middleware
 	maxEventsPerSec := 10
 	maxBurstSize := 5
@@ -78,6 +65,10 @@ func main() {
 
 	// ip whitelist middleware
 	// r.Use(whitelist.IPWhiteListMiddleware(IPList))
+
+	// trusted proxies
+	r.ForwardedByClientIP = true
+	r.SetTrustedProxies(nil)
 
 	// cors middleware
 	r.Use(cors.New(cors.Config{
@@ -92,13 +83,26 @@ func main() {
 		MaxAge: 12 * time.Hour,
 	}))
 
+	// Initialize Firebase auth client once
+	firebaseApp, err := auth.InitFirebase()
+	if err != nil {
+		log.Fatalf("Failed to initialize Firebase: %v", err)
+	}
+
+	// get firebase auth client
+	firebaseAuthClient, err := firebaseApp.Auth(context.Background())
+	if err != nil {
+		log.Fatalf("Failed to get Firebase auth client: %v", err)
+	}
+	// r.Use(auth.FirebaseAuthMiddleware(firebaseAuthClient))
+
 	// contact form
 	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
-	r.POST("/getContactFormByPage", contact.GetContactFormByPage(contactMessegesCollection))
-	r.POST("/setContactFormReplied", contact.SetContactFormReplied(contactMessegesCollection))
+	r.POST("/getContactFormByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.GetContactFormByPage(contactMessegesCollection))
+	r.POST("/setContactFormReplied", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.SetContactFormReplied(contactMessegesCollection))
 
 	// appointment links
 	r.GET("/getAppointmentLink", appointment.GetAppointmentLink(appointmentLinksCollection))
-	r.POST("/setAppointmentLink", appointment.SetAppointmentLink(appointmentLinksCollection))
+	r.POST("/setAppointmentLink", auth.FirebaseAuthMiddleware(firebaseAuthClient), appointment.SetAppointmentLink(appointmentLinksCollection))
 	r.Run(":3000")
 }

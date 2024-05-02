@@ -55,20 +55,6 @@ func SetAppointmentLink(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
-		// insert to mongo
-		insertMsg, err := collection.InsertOne(
-			ctx,
-			bson.M{
-				"type": "link",
-				"link": request.Link,
-				"lot":  request.Lot,
-			},
-		)
-		if err != nil && insertMsg != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Insert Msg Into Database"})
-			return
-		}
-
 		// update current lot
 		setMsg, err := collection.UpdateOne(
 			ctx,

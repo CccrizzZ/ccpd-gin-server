@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"log"
 	"net/http"
 
 	firebase "firebase.google.com/go"
@@ -13,7 +12,7 @@ import (
 
 func InitFirebase() (*firebase.App, error) {
 	// create client option
-	opt := option.WithCredentialsFile("env/ccpd-system-firebase-adminsdk-te9cz-7be0e6279c.json")
+	opt := option.WithCredentialsFile("env/ccpd-system-firebase-adminsdk-te9cz-5284634b36.json")
 
 	// init app
 	app, err := firebase.NewApp(context.Background(), nil, opt)
@@ -36,7 +35,7 @@ func FirebaseAuthMiddleware(client *auth.Client) gin.HandlerFunc {
 			return
 		}
 
-		log.Printf("Verified ID token: %v\n", decodedToken)
+		// log.Printf("Verified ID token: %v\n", decodedToken)
 		c.Set("uid", decodedToken.UID)
 		c.Next()
 	}

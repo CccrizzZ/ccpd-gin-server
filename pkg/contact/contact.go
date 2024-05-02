@@ -14,6 +14,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+var timeFormat string = "2006-01-02 15:04:05"
+
 type ContactUsForm struct {
 	FirstName string `json:"firstname" binding:"required" validate:"required"`
 	LastName  string `json:"lastname" binding:"required" validate:"required"`
@@ -48,18 +50,41 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 
 		// validate with validtor
 		if err := validate.Struct(newFormObj); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Validation error: " + err.Error()})
+			c.String(http.StatusBadRequest, "Validation error: "+err.Error())
 			return
 		}
 
-		// generate and set EST time
-		currTime, err := time.LoadLocation("America/New_York")
+		// create time zone
+		currTimeZone, err := time.LoadLocation("America/New_York")
 		if err != nil {
-			c.String(http.StatusInternalServerError, "Cannot Get Eastern Standard Time")
+			c.String(http.StatusInternalServerError, "Cannot Get EST")
 			return
 		}
-		newFormObj.Time = time.Now().In(currTime).Format(time.UnixDate)
-		fmt.Println(newFormObj)
+
+		// check for IP repeating in 24h
+		now := time.Now().In(currTimeZone)
+		past24Hours := now.Add(-24 * time.Hour)
+		filter := bson.M{
+			"ip": c.ClientIP(),
+			"time": bson.M{
+				"$gte": past24Hours.Format(timeFormat),
+				"$lt":  now.Format(timeFormat),
+			},
+		}
+
+		// if message count greater than 2, return error
+		count, err := collection.CountDocuments(context.TODO(), filter)
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Cannot Count Documents")
+			return
+		}
+		if count > 2 {
+			c.String(http.StatusBadRequest, "Cannot Send Messages, Daily Limits Reached!, Please Contact Us Through Email!")
+			return
+		}
+
+		// fill form
+		newFormObj.Time = now.In(currTimeZone).Format(timeFormat)
 		newFormObj.IP = c.ClientIP()
 		newFormObj.Replied = false
 
