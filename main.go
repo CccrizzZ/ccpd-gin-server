@@ -6,47 +6,35 @@ import (
 	"os"
 	"time"
 
+	"github.com/cccrizzz/ccpd-gin-server/common/azure"
+	auth "github.com/cccrizzz/ccpd-gin-server/common/firebase"
+	"github.com/cccrizzz/ccpd-gin-server/common/mongo"
 	"github.com/cccrizzz/ccpd-gin-server/pkg/appointment"
 	"github.com/cccrizzz/ccpd-gin-server/pkg/contact"
-	auth "github.com/cccrizzz/ccpd-gin-server/pkg/firebase"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	middleware "github.com/s12i/gin-throttle"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// Mongo DB
-var mongoClient *mongo.Client
-
-func initMongo() {
-	uri := os.Getenv("MONGO_CONN")
-	if uri == "" {
-		log.Fatal("Environment variable not found.")
-	}
-	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(uri))
-	if err != nil {
-		log.Fatal(err)
-	}
-	mongoClient = client
-}
-
 // IP whitelist
-var IPList = map[string]bool{
-	"127.0.0.1":      true,
-	"142.114.216.52": true,
-}
+// var IPList = map[string]bool{
+// 	"127.0.0.1":      true,
+// 	"142.114.216.52": true,
+// }
 
 func main() {
 	// load dotenv
 	godotenv.Load()
 
 	// mongodb collections
-	initMongo()
+	mongoClient := mongo.InitMongo()
 	contactMessegesCollection := mongoClient.Database("CCPD").Collection("ContactMesseges")
 	appointmentLinksCollection := mongoClient.Database("CCPD").Collection("AppointmentLinks")
+
+	// azure service client
+	azureClient := azure.InitAzureServiceClient()
 
 	// active release mode
 	if os.Getenv("MODE") == "" || os.Getenv("MODE") == "DEBUG" {
@@ -98,6 +86,7 @@ func main() {
 
 	// contact form
 	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
+	r.POST("/submitImages", azure.SubmitImages(azureClient))
 	r.POST("/getContactFormByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.GetContactFormByPage(contactMessegesCollection))
 	r.POST("/setContactFormReplied", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.SetContactFormReplied(contactMessegesCollection))
 

@@ -40,6 +40,7 @@ var validate = validator.New()
 
 func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx := context.TODO()
 		// bind incoming json to struct
 		var newFormObj ContactUsForm
 		bindErr := c.ShouldBindJSON(&newFormObj)
@@ -73,7 +74,7 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 		}
 
 		// if message count greater than 2, return error
-		count, err := collection.CountDocuments(context.TODO(), filter)
+		count, err := collection.CountDocuments(ctx, filter)
 		if err != nil {
 			c.String(http.StatusInternalServerError, "Cannot Count Documents")
 			return
@@ -89,7 +90,7 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 		newFormObj.Replied = false
 
 		// insert into mongo
-		insertMsg, err := collection.InsertOne(context.TODO(), newFormObj)
+		insertMsg, err := collection.InsertOne(ctx, newFormObj)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Insert Msg Into Database"})
 			return
