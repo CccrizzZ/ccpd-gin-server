@@ -2,7 +2,9 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
+	"os"
 
 	firebase "firebase.google.com/go"
 	"firebase.google.com/go/auth"
@@ -11,9 +13,14 @@ import (
 )
 
 func InitFirebase() (*firebase.App, error) {
-	// create client option
-	opt := option.WithCredentialsFile("env/ccpd-system-firebase-adminsdk-te9cz-5284634b36.json")
+	// opt := option.WithCredentialsFile("env/ccpd-system-firebase-adminsdk-te9cz-5284634b36.json")
 
+	// create client option
+	// grab secret json encoded into base64
+	firebaseJSON := os.Getenv("FIREBASE_JSON")
+	firebaseDecode, _ := base64.StdEncoding.DecodeString(firebaseJSON)
+
+	opt := option.WithCredentialsJSON(firebaseDecode)
 	// init app
 	app, err := firebase.NewApp(context.Background(), nil, opt)
 	if err != nil {

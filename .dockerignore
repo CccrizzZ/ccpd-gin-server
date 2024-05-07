@@ -27,3 +27,4 @@ README.md
 
 *.exe
 env
+.env

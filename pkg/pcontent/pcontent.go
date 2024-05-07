@@ -13,12 +13,11 @@ import (
 
 type LinkJson struct {
 	Link string `json:"link" binding:"required" validate:"required"`
-	Lot  string `json:"lot" binding:"required" validate:"required"`
 }
 
 var validate = validator.New()
 
-func GetAppointmentLink(collection *mongo.Collection) gin.HandlerFunc {
+func GetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// query options
 		opts := options.FindOne().SetSort(bson.D{{Key: "time", Value: -1}})
@@ -38,7 +37,7 @@ func GetAppointmentLink(collection *mongo.Collection) gin.HandlerFunc {
 	}
 }
 
-func SetAppointmentLink(collection *mongo.Collection) gin.HandlerFunc {
+func SetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.TODO()
 		// bind json
@@ -59,7 +58,7 @@ func SetAppointmentLink(collection *mongo.Collection) gin.HandlerFunc {
 		setMsg, err := collection.UpdateOne(
 			ctx,
 			bson.M{"type": "setting"},
-			bson.M{"$set": bson.M{"currentLot": request.Lot, "currentLink": request.Link}},
+			bson.M{"$set": bson.M{"currentLink": request.Link}},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Update Document"})
