@@ -191,7 +191,6 @@ func SetContactFormReplied(collection *mongo.Collection) gin.HandlerFunc {
 		var body setRepliedRequest
 		bindErr := c.ShouldBindJSON(&body)
 		if bindErr != nil {
-			fmt.Println(bindErr.Error())
 			c.String(http.StatusBadRequest, "Please Check Your Inputs!")
 			return
 		}
@@ -209,8 +208,6 @@ func SetContactFormReplied(collection *mongo.Collection) gin.HandlerFunc {
 			bson.M{"$set": bson.M{"replied": true}},
 		)
 		if err != nil {
-			fmt.Println(err.Error())
-
 			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Update Database!"})
 			return
 		}

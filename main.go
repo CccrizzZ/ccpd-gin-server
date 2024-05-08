@@ -87,6 +87,7 @@ func main() {
 	// contact form
 	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
 	r.POST("/submitImages", azure.SubmitImages(azureClient))
+	r.POST("/GetImagesUrlsByTag", azure.GetImagesUrlsByTag(azureClient))
 	r.POST("/getContactFormByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.GetContactFormByPage(contactMessegesCollection))
 	r.POST("/setContactFormReplied", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.SetContactFormReplied(contactMessegesCollection))
 
