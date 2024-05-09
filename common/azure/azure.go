@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
@@ -40,11 +41,11 @@ func SubmitImages(serviceClient *service.Client) gin.HandlerFunc {
 		}
 
 		// construct tags
-		invoice := form.Value["invoice"][0]
+		invoice := strings.ReplaceAll(form.Value["invoice"][0], " ", "")
 		tags := map[string]string{
 			"invoice":  invoice,
-			"lastName": form.Value["lastName"][0],
-			"lot":      form.Value["lot"][0],
+			"lastName": strings.ReplaceAll(form.Value["lastName"][0], " ", ""),
+			"lot":      strings.ReplaceAll(form.Value["lot"][0], " ", ""),
 		}
 
 		// Loop through all files in data form

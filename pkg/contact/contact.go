@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -88,6 +89,11 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 		newFormObj.Time = now.In(currTimeZone).Format(timeFormat)
 		newFormObj.IP = c.ClientIP()
 		newFormObj.Replied = false
+
+		// remove space
+		newFormObj.Invoice = strings.ReplaceAll(newFormObj.Invoice, " ", "")
+		newFormObj.Lot = strings.ReplaceAll(newFormObj.Lot, " ", "")
+		newFormObj.LastName = strings.ReplaceAll(newFormObj.LastName, " ", "")
 
 		// insert into mongo
 		insertMsg, err := collection.InsertOne(ctx, newFormObj)
