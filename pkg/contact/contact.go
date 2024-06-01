@@ -28,7 +28,7 @@ type ContactUsForm struct {
 	Message   string `json:"message" binding:"required" validate:"required"`
 	Time      string `json:"time"`
 	IP        string `json:"ip"`
-	Replied   bool   `json:"replied"`
+	Replied   string `json:"replied"`
 }
 
 type Response struct {
@@ -88,7 +88,7 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 		// fill form
 		newFormObj.Time = now.In(currTimeZone).Format(timeFormat)
 		newFormObj.IP = c.ClientIP()
-		newFormObj.Replied = false
+		newFormObj.Replied = "No"
 
 		// remove space
 		newFormObj.Invoice = strings.ReplaceAll(newFormObj.Invoice, " ", "")
@@ -185,9 +185,8 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 }
 
 type setRepliedRequest struct {
-	Email   string `json:"email" binding:"required" validate:"required"`
-	Time    string `json:"time" binding:"required" validate:"required"`
-	Replied bool   `json:"replied" binding:"required" validate:"required"`
+	Email string `json:"email" binding:"required" validate:"required"`
+	Time  string `json:"time" binding:"required" validate:"required"`
 }
 
 func SetContactFormReplied(collection *mongo.Collection) gin.HandlerFunc {
@@ -207,11 +206,18 @@ func SetContactFormReplied(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
+		// create time zone
+		currTimeZone, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Cannot Get EST")
+			return
+		}
+
 		// update to mongo db
 		insertMsg, err := collection.UpdateOne(
 			ctx,
 			bson.M{"email": body.Email, "time": body.Time},
-			bson.M{"$set": bson.M{"replied": true}},
+			bson.M{"$set": bson.M{"replied": time.Now().In(currTimeZone).Format(timeFormat)}},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Update Database!"})

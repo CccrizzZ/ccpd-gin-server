@@ -10,6 +10,7 @@ import (
 	auth "github.com/cccrizzz/ccpd-gin-server/common/firebase"
 	"github.com/cccrizzz/ccpd-gin-server/common/mongo"
 	"github.com/cccrizzz/ccpd-gin-server/pkg/contact"
+	"github.com/cccrizzz/ccpd-gin-server/pkg/invoices"
 	appointment "github.com/cccrizzz/ccpd-gin-server/pkg/pcontent"
 
 	"github.com/gin-contrib/cors"
@@ -32,6 +33,7 @@ func main() {
 	mongoClient := mongo.InitMongo()
 	contactMessegesCollection := mongoClient.Database("CCPD").Collection("ContactMesseges")
 	pageContenCollection := mongoClient.Database("CCPD").Collection("PageContent")
+	invoicesCollection := mongoClient.Database("CCPD").Collection("Invoices")
 
 	// azure service client
 	azureClient := azure.InitAzureServiceClient()
@@ -94,5 +96,9 @@ func main() {
 	// appointment links
 	r.GET("/getPageContent", appointment.GetPageContent(pageContenCollection))
 	r.POST("/setPageContent", auth.FirebaseAuthMiddleware(firebaseAuthClient), appointment.SetPageContent(pageContenCollection))
+
+	// invoices
+	r.POST("getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
+
 	r.Run(":3000")
 }
