@@ -109,8 +109,9 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 }
 
 type ByPageRequest struct {
-	CurrPage     *int `json:"currPage" binding:"required" validate:"required"`
-	ItemsPerPage *int `json:"itemsPerPage" binding:"required" validate:"required"`
+	CurrPage      *int   `json:"currPage" binding:"required" validate:"required"`
+	ItemsPerPage  *int   `json:"itemsPerPage" binding:"required" validate:"required"`
+	SearchKeyword string `json:"searchKeyword"`
 }
 
 type PaginationResponse struct {
@@ -126,23 +127,25 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 		bindErr := c.ShouldBindJSON(&body)
 		if bindErr != nil {
 			fmt.Println(bindErr.Error())
-			c.String(http.StatusBadRequest, "Please Check Your Inputs!")
+			c.String(http.StatusBadRequest, "Invalid Body")
 			return
 		}
 
 		// validate with validtor
 		if err := validate.Struct(body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Validation error: " + err.Error()})
+			c.String(http.StatusBadRequest, "Validation error: "+err.Error())
 			return
 		}
 
+		fmt.Println(body.SearchKeyword)
+
 		// construct filter
-		currPage := *body.CurrPage
-		itemsPerPage := *body.ItemsPerPage
+		currPage := body.CurrPage
+		itemsPerPage := body.ItemsPerPage
 		fil := options.Find()
-		skip := currPage * itemsPerPage
+		skip := (*currPage) * (*itemsPerPage)
 		fil.SetSkip(int64(skip))
-		fil.SetLimit(int64(itemsPerPage))
+		fil.SetLimit(int64(*itemsPerPage))
 		fil.SetSort(bson.D{{Key: "time", Value: -1}})
 
 		// invoke mongo db

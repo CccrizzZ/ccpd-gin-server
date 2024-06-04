@@ -97,18 +97,34 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 		}
 		defer cursor.Close(ctx) // close it after query
 
+		// count items
+		totalItemsFilterd, countErr := collection.CountDocuments(ctx, fil)
+		if countErr != nil {
+			c.String(http.StatusInternalServerError, "Cannot Get From Database")
+			return
+		}
+		fmt.Println(totalItemsFilterd)
+
 		// store all result in bson array to return it
-		var results []bson.M
+		var itemsArr []bson.M
 		for cursor.Next(ctx) {
 			var result bson.M
 			err := cursor.Decode(&result)
 			if err != nil {
 				c.String(http.StatusInternalServerError, "Database Error!")
 			}
-			results = append(results, result)
+			itemsArr = append(itemsArr, result)
 		}
 
-		fmt.Println(results)
-		c.JSON(200, results)
+		c.JSON(200, gin.H{
+			"itemsArr":   itemsArr,
+			"totalItems": totalItemsFilterd,
+		})
+	}
+}
+
+func GetChartData(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+
 	}
 }
