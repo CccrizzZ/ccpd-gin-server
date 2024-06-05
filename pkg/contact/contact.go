@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,19 +138,50 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
-		fmt.Println(body.SearchKeyword)
-
 		// construct filter
 		currPage := body.CurrPage
 		itemsPerPage := body.ItemsPerPage
-		fil := options.Find()
+		opt := options.Find()
 		skip := (*currPage) * (*itemsPerPage)
-		fil.SetSkip(int64(skip))
-		fil.SetLimit(int64(*itemsPerPage))
-		fil.SetSort(bson.D{{Key: "time", Value: -1}})
+		opt.SetSkip(int64(skip))
+		opt.SetLimit(int64(*itemsPerPage))
+		opt.SetSort(bson.D{{Key: "time", Value: -1}})
+
+		// construct keyword filter object
+		var filter bson.M = bson.M{}
+		if body.SearchKeyword != "" {
+			var orObject = []bson.M{}
+
+			// check if is intiger
+			if intKeyword, err := strconv.Atoi(body.SearchKeyword); err == nil {
+				// push invoice and lot
+				regexObj := bson.M{
+					"$regex":   strconv.Itoa(intKeyword),
+					"$options": "i",
+				}
+				orObject = append(orObject, bson.M{"invoice": regexObj})
+				orObject = append(orObject, bson.M{"lot": regexObj})
+				orObject = append(orObject, bson.M{"phone": regexObj})
+			} else {
+				// push invoice and lot
+				regexObj := bson.M{
+					"$regex":   body.SearchKeyword,
+					"$options": "i",
+				}
+				orObject = append(orObject, bson.M{"reason": regexObj})
+				orObject = append(orObject, bson.M{"message": regexObj})
+				orObject = append(orObject, bson.M{"firstname": regexObj})
+				orObject = append(orObject, bson.M{"lastname": regexObj})
+				orObject = append(orObject, bson.M{"email": regexObj})
+				orObject = append(orObject, bson.M{"time": regexObj})
+			}
+
+			// add $or object into filter
+			filter["$or"] = orObject
+		}
 
 		// invoke mongo db
-		cursor, err := collection.Find(ctx, bson.M{}, fil)
+		cursor, err := collection.Find(ctx, filter, opt)
 		if err == mongo.ErrNoDocuments {
 			c.String(http.StatusBadRequest, "No Documents Found!")
 			return
@@ -188,8 +220,9 @@ func GetContactFormByPage(collection *mongo.Collection) gin.HandlerFunc {
 }
 
 type setRepliedRequest struct {
-	Email string `json:"email" binding:"required" validate:"required"`
-	Time  string `json:"time" binding:"required" validate:"required"`
+	Email     string `json:"email" binding:"required" validate:"required"`
+	Time      string `json:"time" binding:"required" validate:"required"`
+	SalesName string `json:"salesName" binding:"required" validate:"required"`
 }
 
 func SetContactFormReplied(collection *mongo.Collection) gin.HandlerFunc {
@@ -220,7 +253,12 @@ func SetContactFormReplied(collection *mongo.Collection) gin.HandlerFunc {
 		insertMsg, err := collection.UpdateOne(
 			ctx,
 			bson.M{"email": body.Email, "time": body.Time},
-			bson.M{"$set": bson.M{"replied": time.Now().In(currTimeZone).Format(timeFormat)}},
+			bson.M{
+				"$set": bson.M{
+					"replied":   time.Now().In(currTimeZone).Format(timeFormat),
+					"salesName": body.SalesName,
+				},
+			},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Update Database!"})

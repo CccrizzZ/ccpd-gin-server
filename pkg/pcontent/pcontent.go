@@ -11,10 +11,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type LinkJson struct {
-	Link string `json:"link" binding:"required" validate:"required"`
-}
-
 var validate = validator.New()
 
 func GetPageContent(collection *mongo.Collection) gin.HandlerFunc {
@@ -37,6 +33,12 @@ func GetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 	}
 }
 
+type LinkJson struct {
+	VideoLink   string `json:"link" binding:"required" validate:"required"`
+	BookingLink string `json:"bookingLink" binding:"required" validate:"required"`
+	BannerLink  string `json:"BannerLink" binding:"required" validate:"required"`
+}
+
 func SetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.TODO()
@@ -54,11 +56,15 @@ func SetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
-		// update current lot
+		// update current page content
 		setMsg, err := collection.UpdateOne(
 			ctx,
 			bson.M{"type": "setting"},
-			bson.M{"$set": bson.M{"currentLink": request.Link}},
+			bson.M{
+				"$set": bson.M{
+					"currentLink": request.BookingLink,
+				},
+			},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Update Document"})
