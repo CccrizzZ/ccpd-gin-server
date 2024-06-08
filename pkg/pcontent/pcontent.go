@@ -2,59 +2,66 @@ package appointment
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/go-playground/validator/v10"
+	// "github.com/go-playground/validator/v10"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var validate = validator.New()
+// var validate = validator.New()
+
+type PageContent struct {
+	VideoLink       string `json:"link" binding:"required" validate:"required"`
+	BookingLink     string `json:"bookingLink" binding:"required" validate:"required"`
+	BannerImageName string `json:"BannerLink" binding:"required" validate:"required"`
+}
 
 func GetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// query options
-		opts := options.FindOne().SetSort(bson.D{{Key: "time", Value: -1}})
-
 		// pull settings from mongo
 		var result bson.M
 		err := collection.FindOne(
 			context.TODO(),
 			bson.M{"type": "setting"},
-			opts,
+			nil,
 		).Decode(&result)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"data": "Item Not Found!"})
+			c.String(http.StatusNotFound, "Item Not Found!")
 			return
 		}
+
 		c.JSON(http.StatusOK, result)
 	}
 }
 
-type LinkJson struct {
-	VideoLink   string `json:"link" binding:"required" validate:"required"`
-	BookingLink string `json:"bookingLink" binding:"required" validate:"required"`
-	BannerLink  string `json:"BannerLink" binding:"required" validate:"required"`
+// page content is an array of ContentInfo
+type ContentInfo struct {
+	Name string            `json:"name" binding:"required" validate:"required"`
+	Data map[string]string `json:"data"`
 }
 
 func SetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.TODO()
 		// bind json
-		var request LinkJson
-		bindErr := c.ShouldBindJSON(&request)
+		var body []ContentInfo
+
+		bindErr := c.ShouldBindJSON(&body)
 		if bindErr != nil {
+			fmt.Println(bindErr)
 			c.String(http.StatusBadRequest, "Please Check Your Inputs!")
 			return
 		}
 
-		// validate with validtor
-		if err := validate.Struct(request); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Validation error: " + err.Error()})
-			return
-		}
+		// // validate with validtor
+		// if err := validate.Struct(body); err != nil {
+		// 	fmt.Println(err)
+		// 	c.String(http.StatusBadRequest, "Validation error: "+err.Error())
+		// 	return
+		// }
 
 		// update current page content
 		setMsg, err := collection.UpdateOne(
@@ -62,12 +69,12 @@ func SetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 			bson.M{"type": "setting"},
 			bson.M{
 				"$set": bson.M{
-					"currentLink": request.BookingLink,
+					"contentObj": body,
 				},
 			},
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"data": "Cannot Update Document"})
+			c.String(http.StatusInternalServerError, "Cannot Update Document")
 			return
 		}
 

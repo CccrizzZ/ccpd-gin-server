@@ -86,18 +86,20 @@ func main() {
 	}
 	// r.Use(auth.FirebaseAuthMiddleware(firebaseAuthClient))
 
-	// contact form
+	// contact form controller
 	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
 	r.POST("/submitImages", azure.SubmitImages(azureClient))
 	r.POST("/GetImagesUrlsByTag", azure.GetImagesUrlsByTag(azureClient))
 	r.POST("/getContactFormByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.GetContactFormByPage(contactMessegesCollection))
 	r.POST("/setContactFormReplied", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.SetContactFormReplied(contactMessegesCollection))
 
-	// appointment links
+	// page content controller
 	r.GET("/getPageContent", appointment.GetPageContent(pageContenCollection))
 	r.POST("/setPageContent", auth.FirebaseAuthMiddleware(firebaseAuthClient), appointment.SetPageContent(pageContenCollection))
+	r.GET("./getAssetsUrlArr", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.GetAssetsUrlArr(azureClient))
+	r.POST("./uploadPageContentAsset", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.UploadPageContentAsset(azureClient))
 
-	// invoices
+	// invoices controller
 	r.POST("getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
 
 	r.Run(":3000")

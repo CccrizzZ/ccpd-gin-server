@@ -41,11 +41,13 @@ func SubmitImages(serviceClient *service.Client) gin.HandlerFunc {
 		}
 
 		// construct tags
+		// remove space
 		invoice := strings.ReplaceAll(form.Value["invoice"][0], " ", "")
+		lot := strings.ReplaceAll(form.Value["lot"][0], " ", "")
 		tags := map[string]string{
 			"invoice":  invoice,
 			"lastName": strings.ReplaceAll(form.Value["lastName"][0], " ", ""),
-			"lot":      strings.ReplaceAll(form.Value["lot"][0], " ", ""),
+			"lot":      strings.ReplaceAll(lot, ".", ""), // remove dots
 		}
 
 		// Loop through all files in data form
@@ -57,6 +59,7 @@ func SubmitImages(serviceClient *service.Client) gin.HandlerFunc {
 					break
 				}
 
+				// open file
 				file, err := fileHeader.Open()
 				if err != nil {
 					log.Println("Cannot Open File:", err)
@@ -94,6 +97,7 @@ type ImageTagRequest struct {
 	Lot      string `json:"lot" binding:"required" validate:"required"`
 }
 
+// view image in the 258 admin console
 func GetImagesUrlsByTag(serviceClient *service.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.Background()
@@ -131,5 +135,74 @@ func GetImagesUrlsByTag(serviceClient *service.Client) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"data": urlArr})
+	}
+}
+
+// upload single image to page content images blob container
+func UploadPageContentAsset(serviceClient *service.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		// read file from body
+		file, err := c.FormFile("image")
+		if err != nil {
+			fmt.Println("Cannot Open File:", err)
+			c.String(http.StatusBadRequest, "Invalid Body")
+			return
+		}
+
+		// file size should be under 10mb
+		if file.Size > 10*1024*1024 {
+			c.String(http.StatusBadRequest, "File Must Be Under 10 MB")
+			return
+		}
+
+		// open the file
+		fh, err := file.Open()
+		if err != nil {
+			fmt.Println("Cannot Open File:", err)
+			c.String(http.StatusBadRequest, "Invalid Body")
+			fh.Close()
+			return
+		}
+
+		// create blob client
+		containerClient := serviceClient.NewContainerClient("page-content-image")
+		blobClient := containerClient.NewBlockBlobClient(file.Filename)
+
+		// upload the blob
+		_, err = blobClient.Upload(ctx, fh, nil)
+		if err != nil {
+			fmt.Println("Error Uploading File:", err)
+			c.String(http.StatusInternalServerError, "Error Uploading File")
+			fh.Close()
+			return
+		}
+		c.String(http.StatusOK, "Uploaded Image")
+	}
+}
+
+// called by 258 web app to load page content image
+func GetAssetsUrlArr(serviceClient *service.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		var urlArr []string
+
+		// create blob client
+		containerClient := serviceClient.NewContainerClient("page-content-image")
+		pager := containerClient.NewListBlobsFlatPager(nil)
+		for pager.More() {
+			page, err := pager.NextPage(ctx)
+			if err != nil {
+				c.String(http.StatusNotFound, "Cannot Get Assets Gallery")
+			}
+
+			for _, blobInfo := range page.Segment.BlobItems {
+				blobUrl := containerClient.NewBlobClient(*blobInfo.Name).URL()
+				cleanURL := strings.Split(blobUrl, "?")[0]
+				urlArr = append(urlArr, cleanURL)
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"arr": urlArr})
 	}
 }
