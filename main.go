@@ -97,7 +97,7 @@ func main() {
 	r.GET("/getPageContent", appointment.GetPageContent(pageContenCollection))
 	r.POST("/setPageContent", auth.FirebaseAuthMiddleware(firebaseAuthClient), appointment.SetPageContent(pageContenCollection))
 	r.GET("./getAssetsUrlArr", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.GetAssetsUrlArr(azureClient))
-	r.POST("./uploadPageContentAsset", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.UploadPageContentAsset(azureClient))
+	r.POST("./uploadPageContentAssets", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.UploadPageContentAssets(azureClient))
 
 	// invoices controller
 	r.POST("getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))

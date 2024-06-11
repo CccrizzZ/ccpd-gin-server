@@ -139,45 +139,65 @@ func GetImagesUrlsByTag(serviceClient *service.Client) gin.HandlerFunc {
 }
 
 // upload single image to page content images blob container
-func UploadPageContentAsset(serviceClient *service.Client) gin.HandlerFunc {
+func UploadPageContentAssets(serviceClient *service.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.Background()
 		// read file from body
-		file, err := c.FormFile("image")
+		form, err := c.MultipartForm()
 		if err != nil {
 			fmt.Println("Cannot Open File:", err)
 			c.String(http.StatusBadRequest, "Invalid Body")
 			return
 		}
 
-		// file size should be under 10mb
-		if file.Size > 10*1024*1024 {
-			c.String(http.StatusBadRequest, "File Must Be Under 10 MB")
-			return
-		}
+		files := form.File["files"]
+		for _, file := range files {
 
-		// open the file
-		fh, err := file.Open()
-		if err != nil {
-			fmt.Println("Cannot Open File:", err)
-			c.String(http.StatusBadRequest, "Invalid Body")
-			fh.Close()
-			return
-		}
+			// // file size should be under 10mb
+			// if file.Size > 10*1024*1024 {
+			// 	c.String(http.StatusBadRequest, "File Must Be Under 10 MB")
+			// 	return
+			// }
 
-		// create blob client
-		containerClient := serviceClient.NewContainerClient("page-content-image")
-		blobClient := containerClient.NewBlockBlobClient(file.Filename)
+			// open the file
+			fh, err := file.Open()
+			if err != nil {
+				fmt.Println("Cannot Open File:", err)
+				c.String(http.StatusBadRequest, "Invalid Body")
+				fh.Close()
+				return
+			}
 
-		// upload the blob
-		_, err = blobClient.Upload(ctx, fh, nil)
-		if err != nil {
-			fmt.Println("Error Uploading File:", err)
-			c.String(http.StatusInternalServerError, "Error Uploading File")
-			fh.Close()
-			return
+			// create blob client
+			containerClient := serviceClient.NewContainerClient("page-content-image")
+			blobClient := containerClient.NewBlockBlobClient(file.Filename)
+
+			// upload the blob
+			_, err = blobClient.Upload(ctx, fh, nil)
+			if err != nil {
+				fmt.Println("Error Uploading File:", err)
+				c.String(http.StatusInternalServerError, "Error Uploading File")
+				fh.Close()
+				return
+			}
 		}
 		c.String(http.StatusOK, "Uploaded Image")
+	}
+}
+
+type DeleteRequest struct {
+	FileName string `json:"fileName" binding:"required" validate:"required"`
+}
+
+func DeletePageContentAssetByName(serviceClient *service.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// ctx := context.Background()
+		var body DeleteRequest
+		bindErr := c.ShouldBindJSON(&body)
+		if bindErr != nil {
+			fmt.Println(bindErr.Error())
+		}
+
 	}
 }
 
