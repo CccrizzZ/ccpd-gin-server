@@ -63,7 +63,7 @@ func main() {
 	// cors middleware
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
-		AllowMethods:     []string{"PUT", "PATCH", "OPTION", "GET", "POST"},
+		AllowMethods:     []string{"PUT", "PATCH", "OPTION", "GET", "POST", "DELETE"},
 		AllowHeaders:     []string{"*"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
@@ -98,6 +98,7 @@ func main() {
 	r.POST("/setPageContent", auth.FirebaseAuthMiddleware(firebaseAuthClient), appointment.SetPageContent(pageContenCollection))
 	r.GET("./getAssetsUrlArr", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.GetAssetsUrlArr(azureClient))
 	r.POST("./uploadPageContentAssets", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.UploadPageContentAssets(azureClient))
+	r.DELETE("./deletePageContentAsset", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.DeletePageContentAsset(azureClient))
 
 	// invoices controller
 	r.POST("getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))

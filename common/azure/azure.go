@@ -65,6 +65,7 @@ func SubmitImages(serviceClient *service.Client) gin.HandlerFunc {
 					log.Println("Cannot Open File:", err)
 					file.Close()
 				}
+				defer file.Close()
 
 				// init client
 				containerClient := serviceClient.NewContainerClient("contact-image" + "/" + invoice)
@@ -152,7 +153,6 @@ func UploadPageContentAssets(serviceClient *service.Client) gin.HandlerFunc {
 
 		files := form.File["files"]
 		for _, file := range files {
-
 			// // file size should be under 10mb
 			// if file.Size > 10*1024*1024 {
 			// 	c.String(http.StatusBadRequest, "File Must Be Under 10 MB")
@@ -189,19 +189,29 @@ type DeleteRequest struct {
 	FileName string `json:"fileName" binding:"required" validate:"required"`
 }
 
-func DeletePageContentAssetByName(serviceClient *service.Client) gin.HandlerFunc {
+// delete one page content asset by name
+func DeletePageContentAsset(serviceClient *service.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// ctx := context.Background()
+		ctx := context.Background()
 		var body DeleteRequest
 		bindErr := c.ShouldBindJSON(&body)
 		if bindErr != nil {
 			fmt.Println(bindErr.Error())
+			c.String(http.StatusBadRequest, "Invalid Body")
 		}
 
+		// create clients and delete the blob
+		containerClient := serviceClient.NewContainerClient("page-content-image")
+		blobClient := containerClient.NewBlobClient(body.FileName)
+		_, err := blobClient.Delete(ctx, nil)
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Cannot Delete File")
+		}
+		c.String(200, "File Deleted")
 	}
 }
 
-// called by 258 web app to load page content image
+// called by 258 web app to load page content assets gallery
 func GetAssetsUrlArr(serviceClient *service.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.Background()
