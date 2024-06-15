@@ -55,15 +55,18 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
-		fmt.Printf("%+v\n", *body.CurrPage)
-		fmt.Printf("%+v\n", body.Filter)
-		fmt.Printf("%+v\n", *body.Filter.Shipping)
+		fmt.Printf("CurrPage: %+v\n", *body.CurrPage)
+		fmt.Printf("ItemsPerPage: %+v\n", *body.Filter)
+		fmt.Printf("isShipping: %+v\n", *body.Filter.Shipping)
 
 		// construct shipping filter
 		shippingFilter := bson.D{{}}
 		isShipping := *body.Filter.Shipping
+		// all selection will exclude shipping from request body
 		if isShipping != "" {
+			// set key
 			shippingFilter[0].Key = "isShipping"
+			// set filter value
 			if isShipping == "pickup" {
 				shippingFilter[0].Value = false
 			} else if isShipping == "shipping" {
@@ -71,22 +74,27 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 			}
 		}
 
-		// destruct filters
+		// construct payment method filter
+		// var invoiceTotalRange bson.D
+		// totalRange := body.Filter.InvoiceTotalRange
+		// invoiceTotalRange[0].Key = totalRange.Min
+
+		// make mongo db filters
 		fil := bson.D{
 			{
 				Key: "$and",
 				Value: bson.A{
-					// bson.D{{Key: "currPage", Value: *body.CurrPage}},
 					shippingFilter,
 				},
 			},
 		}
 
 		// new query options setting sort and skip
+		itemsPerPage := int64(*body.ItemsPerPage)
 		opt := options.Find().SetSort(bson.D{{
 			Key:   "timeCreated",
 			Value: -1,
-		}}).SetSkip(int64(*body.CurrPage))
+		}}).SetSkip(int64(*body.CurrPage) * itemsPerPage).SetLimit(itemsPerPage)
 
 		// find items in database using above options
 		cursor, err := collection.Find(ctx, fil, opt)
@@ -103,7 +111,6 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 			c.String(http.StatusInternalServerError, "Cannot Get From Database")
 			return
 		}
-		fmt.Println(totalItemsFilterd)
 
 		// store all result in bson array to return it
 		var itemsArr []bson.M

@@ -102,6 +102,9 @@ func main() {
 
 	// invoices controller
 	r.POST("getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
+	// r.POST("addInvoice")
+	// r.POST("deleteInvoice")
+	// r.POST("updateInvoice")
 
 	r.Run(":3000")
 }
