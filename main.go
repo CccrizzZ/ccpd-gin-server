@@ -101,7 +101,9 @@ func main() {
 	r.DELETE("./deletePageContentAsset", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.DeletePageContentAsset(azureClient))
 
 	// invoices controller
-	r.POST("getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
+	r.POST("/getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
+	r.POST("/convertAllTimes", invoices.ConvertAllTimes(invoicesCollection))
+
 	// r.POST("addInvoice")
 	// r.POST("deleteInvoice")
 	// r.POST("updateInvoice")

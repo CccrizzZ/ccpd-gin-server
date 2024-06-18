@@ -3,6 +3,7 @@ package invoices
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+var timeFormat string = "2006-01-02T15:04:05Z07:00"
 
 type NewInvoice struct {
 	InvoiceNumber string `json:"invoiceNumber" binding:"required" validate:"required"`
@@ -42,6 +45,7 @@ type GetInvoiceRequest struct {
 	CurrPage     *int           `json:"currPage" binding:"required"`
 	ItemsPerPage *int           `json:"itemsPerPage" binding:"required"`
 	Filter       *InvoiceFilter `json:"filter" binding:"required"`
+	TimeOrder    *int           `json:"timeOrder" binding:"required"`
 }
 
 func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
@@ -92,8 +96,8 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 		// new query options setting sort and skip
 		itemsPerPage := int64(*body.ItemsPerPage)
 		opt := options.Find().SetSort(bson.D{{
-			Key:   "timeCreated",
-			Value: -1,
+			Key:   "time",
+			Value: int32(*body.TimeOrder),
 		}}).SetSkip(int64(*body.CurrPage) * itemsPerPage).SetLimit(itemsPerPage)
 
 		// find items in database using above options
@@ -130,8 +134,44 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 	}
 }
 
+// date for invoice controller charts
 func GetChartData(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
 
+	}
+}
+
+// convert all time strings to RFC3339 format
+func ConvertAllTimes(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		cursor, err := collection.Find(ctx, bson.M{"time": bson.M{"$exists": true}}, nil)
+		if err != nil {
+			log.Fatal("cannot find")
+		}
+		defer cursor.Close(ctx)
+		for cursor.Next(ctx) {
+			var document bson.M
+			err := cursor.Decode(&document)
+			if err != nil {
+				log.Fatal("cannot decode cursor")
+			}
+			parsedTime, err := time.Parse("1/2/2006, 3:04:05 PM", document["time"].(string))
+			if err != nil {
+				log.Fatal("cannot parse time")
+			}
+			newTime := parsedTime.Format(timeFormat)
+			fmt.Println(newTime)
+			updateOption := bson.M{
+				"$set": bson.M{
+					"time": newTime,
+				},
+			}
+			_, updateErr := collection.UpdateOne(ctx, bson.M{"_id": document["_id"]}, updateOption)
+			if updateErr != nil {
+				log.Fatal("Cannot update")
+			}
+		}
+		c.String(200, "Pass")
 	}
 }
