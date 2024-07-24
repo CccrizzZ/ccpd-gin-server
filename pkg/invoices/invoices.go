@@ -1,12 +1,17 @@
 package invoices
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/dslipak/pdf"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -15,15 +20,143 @@ import (
 
 var timeFormat string = "2006-01-02T15:04:05Z07:00"
 
-type NewInvoice struct {
-	InvoiceNumber string `json:"invoiceNumber" binding:"required" validate:"required"`
-	Message       string `json:"message" binding:"required" validate:"required"`
-	InvoiceTotal  string `json:"invoiceTotal" binding:"required"`
+type Invoice struct {
+	InvoiceNumber string  `json:"invoiceNumber" binding:"required" validate:"required"`
+	Time          string  `json:"time" binding:"required" validate:"required"`
+	BuyerName     string  `json:"buyerName" binding:"required" validate:"required"`
+	BuyerEmail    string  `json:"buyerEmail" binding:"required" validate:"required"`
+	AuctionLot    int     `json:"auctionLot" binding:"required" validate:"required"`
+	InvoiceTotal  float32 `json:"invoiceTotal" binding:"required"`
+	Message       string  `json:"message" binding:"required" validate:"required"`
+}
+
+type InvoiceItem struct {
+	Msrp          string `json:"msrp"`
+	ShelfLocation string `json:"shelfLocation"`
+	Sku           int    `json:"sku"`
+	ItemLot       int    `json:"itemLot"`
+	Desc          string `json:"description"`
+	Unit          int    `json:"unit"`
+	UnitPrice     int    `json:"unitPrice"`
+	ExtendedPrice int    `json:"extendedPrice"` // unit * unitPrice
+	HandlingFee   int    `json:"handlingFee"`
 }
 
 func CreateInvoice() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// ctx := context.Background()
+		var newInvoice Invoice
+		bindErr := c.ShouldBindJSON(&newInvoice)
+		if bindErr != nil {
+			c.String(http.StatusBadRequest, "Invalid Body")
+			return
+		}
+	}
+}
 
+type PDFRequest struct {
+	PDF []byte `json:"pdf"`
+}
+
+func CreateInvoiceFromPDF() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// ctx := context.Background()
+		// get files from form
+		// form, err := c.MultipartForm()
+		// if err != nil {
+		// 	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		// 	return
+		// }
+
+		// open file from request
+		file, header, err := c.Request.FormFile("file")
+		if err != nil {
+			c.String(http.StatusBadRequest, "Cannot Read File")
+			return
+		}
+		defer file.Close()
+
+		// Check the file extension
+		if filepath.Ext(header.Filename) != ".pdf" {
+			c.String(http.StatusBadRequest, "Please Only Upload PDF File")
+			return
+		}
+
+		// check file size
+		if header.Size > 10*1024*1024 {
+			c.String(http.StatusBadRequest, "File Size Must Not Exceed 10 MB")
+			return
+		}
+
+		// create temp file from buffer
+		tmp, err := os.CreateTemp("./", "temp_*.pdf")
+		if err != nil {
+			fmt.Println(err.Error())
+			c.String(http.StatusInternalServerError, "Error Creating Temp File: %v", err)
+			return
+		}
+		fmt.Println(tmp.Name())
+		defer os.Remove(tmp.Name())
+		defer tmp.Close()
+
+		// write data into tmp file
+		_, err = io.Copy(tmp, file)
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Error Writing Temp File: %v", err)
+			return
+		}
+
+		// multiple pdf
+		// // Loop through all files in data form
+		// for name, files := range form.File {
+		// 	// open every file and upload
+		// 	for _, fileHeader := range files {
+		// 		if fileHeader.Size > 10*1024*1024 {
+		// 			c.String(http.StatusBadRequest, "File Size Must Not Exceed 10 MB")
+		// 			break
+		// 		}
+		// 	}
+		// 	fmt.Println(name)
+		// }
+
+		// load with dslipakr pfd library
+		// f, openErr := pdf.Open("./pkg/invoices/Invoice_25632.pdf")
+		f, openErr := pdf.Open(tmp.Name())
+		if openErr != nil {
+			fmt.Println(openErr.Error())
+			c.String(http.StatusInternalServerError, openErr.Error())
+			return
+		}
+
+		// read plain text into buffer
+		var buf bytes.Buffer
+		reader, textErr := f.GetPlainText()
+		if textErr != nil {
+			fmt.Println(textErr.Error())
+			c.String(http.StatusInternalServerError, textErr.Error())
+			return
+		}
+		buf.ReadFrom(reader)
+
+		// fmt.Println(buf.String())
+
+		// err = os.Remove(tmp.Name())
+		// if err != nil {
+		// 	fmt.Println("Error deleting file:", err)
+		// 	return
+		// }
+
+		// obj, err := parseInvoice(buf.String())
+		// if err != nil {
+		// 	fmt.Println(err)
+		// }
+		// fmt.Println(obj)
+
+		// returns ok if success
+		c.JSON(http.StatusOK, gin.H{
+			"data": buf.String(),
+			"size": header.Size,
+		})
 	}
 }
 
@@ -127,6 +260,7 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 			itemsArr = append(itemsArr, result)
 		}
 
+		// return the item info as json
 		c.JSON(200, gin.H{
 			"itemsArr":   itemsArr,
 			"totalItems": totalItemsFilterd,
@@ -134,7 +268,7 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 	}
 }
 
-// date for invoice controller charts
+// datas for invoice controller charts
 func GetChartData(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
 

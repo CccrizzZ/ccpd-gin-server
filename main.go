@@ -102,11 +102,8 @@ func main() {
 
 	// invoices controller
 	r.POST("/getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
-	r.POST("/convertAllTimes", invoices.ConvertAllTimes(invoicesCollection))
-
-	// r.POST("addInvoice")
-	// r.POST("deleteInvoice")
-	// r.POST("updateInvoice")
+	r.POST("/createInvoiceFromPdf", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoiceFromPDF())
+	// r.POST("/convertAllTimes", invoices.ConvertAllTimes(invoicesCollection))
 
 	r.Run(":3000")
 }

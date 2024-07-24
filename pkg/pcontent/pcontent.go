@@ -56,13 +56,6 @@ func SetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
-		// // validate with validtor
-		// if err := validate.Struct(body); err != nil {
-		// 	fmt.Println(err)
-		// 	c.String(http.StatusBadRequest, "Validation error: "+err.Error())
-		// 	return
-		// }
-
 		// update current page content
 		setMsg, err := collection.UpdateOne(
 			ctx,
