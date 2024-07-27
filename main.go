@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cccrizzz/ccpd-gin-server/common/azure"
+	"github.com/cccrizzz/ccpd-gin-server/common/do"
 	auth "github.com/cccrizzz/ccpd-gin-server/common/firebase"
 	"github.com/cccrizzz/ccpd-gin-server/common/mongo"
 	"github.com/cccrizzz/ccpd-gin-server/pkg/contact"
@@ -34,6 +35,9 @@ func main() {
 	contactMessegesCollection := mongoClient.Database("CCPD").Collection("ContactMesseges")
 	pageContenCollection := mongoClient.Database("CCPD").Collection("PageContent")
 	invoicesCollection := mongoClient.Database("CCPD").Collection("Invoices")
+
+	// digital ocean space object storage
+	spaceObjectStorageClient := do.InitSpaceObjectStorage()
 
 	// azure service client
 	azureClient := azure.InitAzureServiceClient()
@@ -102,7 +106,7 @@ func main() {
 
 	// invoices controller
 	r.POST("/getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
-	r.POST("/createInvoiceFromPdf", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoiceFromPDF())
+	r.POST("/createInvoiceFromPdf", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoiceFromPDF(spaceObjectStorageClient))
 	// r.POST("/convertAllTimes", invoices.ConvertAllTimes(invoicesCollection))
 
 	r.Run(":3000")
