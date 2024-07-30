@@ -198,6 +198,13 @@ func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
 		// 	return
 		// }
 
+		// parse upload pdf option from form value
+		uploadPDF := c.Request.FormValue("uploadPDF")
+		toUpload, err := strconv.ParseBool(uploadPDF)
+		if err != nil {
+			c.String(http.StatusBadRequest, "No Upload PDF Option Passed")
+		}
+
 		// open file from request
 		file, header, err := c.Request.FormFile("file")
 		if err != nil {
@@ -225,9 +232,11 @@ func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
 			return
 		}
 
-		// upload invoice to space object storage
-		cdnLink := UploadInvoice(ctx, storageClient, file, header)
-		fmt.Println(cdnLink)
+		// upload invoice to space object storage if uploadPDF in form is true
+		if toUpload {
+			cdnLink := UploadInvoice(ctx, storageClient, file, header)
+			fmt.Println(cdnLink)
+		}
 
 		// create temp file from buffer
 		tmp, createErr := os.CreateTemp("./", "*.pdf")
@@ -260,6 +269,7 @@ func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
 
 		// load with dslipakr pfd library
 		f, openErr := pdf.Open(tmp.Name())
+
 		if openErr != nil {
 			fmt.Println(openErr.Error())
 			c.String(http.StatusInternalServerError, openErr.Error())
@@ -275,29 +285,37 @@ func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
 			return
 		}
 		buf.ReadFrom(reader)
-		textToRemove := "Monday: CloseTuesday - Saturday: 12:00pm - 6:30pm"
-		textToRemove2 := "CC Power Deals240 Bartor Road, Unit 4, North York, ON, M9M 2W6+1 416-740-2333"
-		textToRemove3 := "READ NEW TERMS OF USE BEFORE YOU BID!"
-		textToRemove4 := "READ EMAIL FOR PICK-UP & SHIPPING INSTRUCTIONS"
-		textToRemove5 := "Sunday: CloseWe Asked All Items Should Check at Our Location"
-		textToRemove6 := "NO RETURN AND REFUND"
 
-		result_text := strings.ReplaceAll(buf.String(), textToRemove, "")
-		result_text2 := strings.ReplaceAll(result_text, textToRemove2, "")
-		result_text3 := strings.ReplaceAll(result_text2, textToRemove3, "")
-		result_text4 := strings.ReplaceAll(result_text3, textToRemove4, "")
-		result_text5 := strings.ReplaceAll(result_text4, textToRemove5, "")
-		result_text6 := strings.ReplaceAll(result_text5, textToRemove6, "")
+		// remove heading and footer
+		textToRemoveArr := []string{
+			"Monday: CloseTuesday - Saturday: 12:00pm - 6:30pm",
+			"CC Power Deals240 Bartor Road, Unit 4, North York, ON, M9M 2W6+1 416-740-2333",
+			"READ NEW TERMS OF USE BEFORE YOU BID!",
+			"READ EMAIL FOR PICK-UP & SHIPPING INSTRUCTIONS",
+			"Sunday: CloseWe Asked All Items Should Check at Our Location",
+			"NO RETURN AND REFUND",
+		}
+		extractedText := buf.String()
+		for _, val := range textToRemoveArr {
+			extractedText = strings.ReplaceAll(extractedText, val, "")
+		}
 
 		// parse text into map object
-		res := parseInvoice(result_text6)
-		fmt.Println(result_text6)
+		res := parseInvoice(extractedText)
+		fmt.Println(extractedText)
 
 		// remove temp file
 		// sometimes works sometimes doesn't
-		tmp.Close()
+		closeErr := tmp.Close()
+		if closeErr != nil {
+			fmt.Println(closeErr.Error())
+		}
+
 		// time.Sleep(3 * time.Second)
-		os.Remove(tmp.Name())
+		removeErr := os.Remove(tmp.Name())
+		if removeErr != nil {
+			fmt.Println(removeErr.Error())
+		}
 
 		// returns ok if success
 		c.JSON(http.StatusOK, gin.H{
@@ -313,12 +331,14 @@ type Range struct {
 }
 
 type InvoiceFilter struct {
-	PaymentMethod     []*string   `json:"paymentMethod" binding:"required"`
-	Status            []*string   `json:"status" binding:"required"`
-	Shipping          *string     `json:"shipping" binding:"required"`
-	DateRange         []time.Time `json:"dateRange" binding:"required"`
-	InvoiceTotalRange Range       `json:"invoiceTotalRange" binding:"required"`
-	Keyword           *string     `json:"keyword" binding:"required"`
+	// DateRange         []time.Time `json:"dateRange" binding:"required"`
+	PaymentMethod     []string `json:"paymentMethod" binding:"required"`
+	Status            []string `json:"status" binding:"required"`
+	Shipping          *string  `json:"shipping" binding:"required"`
+	FromDate          string   `json:"fromDate"`
+	ToDate            string   `json:"toDate"`
+	InvoiceTotalRange Range    `json:"invoiceTotalRange" binding:"required"`
+	Keyword           *string  `json:"keyword" binding:"required"`
 }
 
 type GetInvoiceRequest struct {
@@ -339,9 +359,42 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
-		fmt.Printf("CurrPage: %+v\n", *body.CurrPage)
-		fmt.Printf("ItemsPerPage: %+v\n", *body.ItemsPerPage)
-		fmt.Printf("isShipping: %+v\n", *body.Filter.Shipping)
+		// make date range filter
+		timeFilter := bson.M{}
+		if body.Filter.FromDate != "" {
+			timeFilter["$gte"] = body.Filter.FromDate
+		}
+		if body.Filter.ToDate != "" {
+			timeFilter["$lte"] = body.Filter.ToDate
+		} else if body.Filter.FromDate != "" {
+			// if only fromdate input and no todate
+			// set todate to next day of fromdate
+			dateObj, err := time.Parse(time.RFC3339, body.Filter.FromDate)
+			if err != nil {
+				fmt.Println("Error Parsing toDate:", err)
+				return
+			}
+			newDate := dateObj.Add(24 * time.Hour)
+			timeFilter["$lte"] = newDate.Format(time.RFC3339)
+		}
+		dateRangeFilter := bson.D{{
+			Key:   "time",
+			Value: timeFilter,
+		}}
+
+		// multiple payment method choices
+		paymentMethodFilter := bson.D{{
+			Key:   "$or",
+			Value: nil,
+		}}
+		if len(body.Filter.PaymentMethod) > 0 {
+			// loop all payment method, populate $or filter
+			var tempArr = bson.A{}
+			for _, val := range body.Filter.PaymentMethod {
+				tempArr = append(tempArr, bson.M{"paymentMethod": val})
+			}
+			paymentMethodFilter[0].Value = tempArr
+		}
 
 		// construct shipping filter
 		shippingFilter := bson.D{{}}
@@ -364,14 +417,24 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 		// invoiceTotalRange[0].Key = totalRange.Min
 
 		// make mongo db filters
+		andFilters := bson.A{
+			shippingFilter,
+		}
+		// if payment method passed in, append payment method filter
+		if paymentMethodFilter[0].Value != nil {
+			andFilters = append(andFilters, paymentMethodFilter)
+		}
+		// if one of the date range passed in, append the date filter
+		if timeFilter["$gte"] != nil || timeFilter["$lte"] != nil {
+			andFilters = append(andFilters, dateRangeFilter)
+		}
 		fil := bson.D{
 			{
-				Key: "$and",
-				Value: bson.A{
-					shippingFilter,
-				},
+				Key:   "$and",
+				Value: andFilters,
 			},
 		}
+		fmt.Println(fil)
 
 		// new query options setting sort and skip
 		itemsPerPage := int64(*body.ItemsPerPage)
@@ -389,14 +452,14 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 		}
 		defer cursor.Close(ctx) // close it after query
 
-		// count items
+		// count filtered items
 		totalItemsFilterd, countErr := collection.CountDocuments(ctx, fil)
 		if countErr != nil {
 			c.String(http.StatusInternalServerError, "Cannot Get From Database")
 			return
 		}
 
-		// store all result in bson array to return it
+		// store all result in array of objects
 		var itemsArr []bson.M
 		for cursor.Next(ctx) {
 			var result bson.M
