@@ -188,6 +188,7 @@ func parseInvoice(text string) Invoice {
 	}
 }
 
+// this one only process UNPAID invoice pdf
 func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.Background()
@@ -244,8 +245,16 @@ func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
 			c.String(http.StatusInternalServerError, "Error Creating Temp File: %v", createErr.Error())
 			return
 		}
-		defer tmp.Close()
-		defer os.Remove(tmp.Name())
+		defer func() {
+			closeErr := tmp.Close()
+			if closeErr != nil {
+				fmt.Println(closeErr.Error())
+			}
+			removeErr := os.Remove(tmp.Name())
+			if removeErr != nil {
+				fmt.Println(removeErr.Error())
+			}
+		}()
 
 		// write data into tmp file
 		var _, copyErr = io.Copy(tmp, file)
@@ -267,18 +276,23 @@ func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
 		// 	fmt.Println(name)
 		// }
 
-		// load with dslipakr pfd library
-		f, openErr := pdf.Open(tmp.Name())
+		// get file size
+		tmpFileInformation, fileInfoErr := tmp.Stat()
+		if fileInfoErr != nil {
+			tmp.Close()
+			c.String(http.StatusInternalServerError, fileInfoErr.Error())
+		}
 
-		if openErr != nil {
-			fmt.Println(openErr.Error())
-			c.String(http.StatusInternalServerError, openErr.Error())
-			return
+		// make reader
+		pdfObj, readerErr := pdf.NewReader(tmp, tmpFileInformation.Size())
+		if readerErr != nil {
+			tmp.Close()
+			c.String(http.StatusInternalServerError, readerErr.Error())
 		}
 
 		// read plain text into buffer
 		var buf bytes.Buffer
-		reader, textErr := f.GetPlainText()
+		reader, textErr := pdfObj.GetPlainText()
 		if textErr != nil {
 			fmt.Println(textErr.Error())
 			c.String(http.StatusInternalServerError, textErr.Error())
@@ -304,23 +318,9 @@ func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
 		res := parseInvoice(extractedText)
 		fmt.Println(extractedText)
 
-		// remove temp file
-		// sometimes works sometimes doesn't
-		closeErr := tmp.Close()
-		if closeErr != nil {
-			fmt.Println(closeErr.Error())
-		}
-
-		// time.Sleep(3 * time.Second)
-		removeErr := os.Remove(tmp.Name())
-		if removeErr != nil {
-			fmt.Println(removeErr.Error())
-		}
-
-		// returns ok if success
+		// return invoice object
 		c.JSON(http.StatusOK, gin.H{
 			"data": res,
-			"size": header.Size,
 		})
 	}
 }
@@ -339,6 +339,7 @@ type InvoiceFilter struct {
 	ToDate            string   `json:"toDate"`
 	InvoiceTotalRange Range    `json:"invoiceTotalRange" binding:"required"`
 	Keyword           *string  `json:"keyword" binding:"required"`
+	InvoiceNumber     int      `json:"invoiceNumber"`
 }
 
 type GetInvoiceRequest struct {
@@ -396,6 +397,19 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 			paymentMethodFilter[0].Value = tempArr
 		}
 
+		// invoice status filter
+		statusFilter := bson.D{{
+			Key:   "$or",
+			Value: nil,
+		}}
+		if len(body.Filter.Status) > 0 {
+			var tempArr = bson.A{}
+			for _, val := range body.Filter.Status {
+				tempArr = append(tempArr, bson.M{"status": val})
+			}
+			statusFilter[0].Value = tempArr
+		}
+
 		// construct shipping filter
 		shippingFilter := bson.D{{}}
 		isShipping := *body.Filter.Shipping
@@ -412,21 +426,66 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 		}
 
 		// construct payment method filter
-		// var invoiceTotalRange bson.D
-		// totalRange := body.Filter.InvoiceTotalRange
-		// invoiceTotalRange[0].Key = totalRange.Min
+		totalFilter := bson.M{}
+		minInvoiceTotal := body.Filter.InvoiceTotalRange.Min
+		if minInvoiceTotal != 0 {
+			totalFilter["$gte"] = minInvoiceTotal
+		}
+		maxInvoiceTotal := body.Filter.InvoiceTotalRange.Max
+		if maxInvoiceTotal != 999999 {
+			totalFilter["$lte"] = maxInvoiceTotal
+		}
+		invoiceTotalFilter := bson.D{{
+			Key:   "invoiceTotal",
+			Value: totalFilter,
+		}}
 
-		// make mongo db filters
+		// keyword filter
+		kwFilter := bson.D{{
+			Key:   "$or",
+			Value: nil,
+		}}
+		words := strings.Fields(*body.Filter.Keyword)
+		fmt.Println(words)
+		if len(words) > 0 {
+			var tempArr = bson.A{}
+			for _, val := range words {
+				tempArr = append(tempArr, bson.M{"buyerAddress": bson.M{"$regex": val}})
+				tempArr = append(tempArr, bson.M{"buyerEmail": bson.M{"$regex": val}})
+				tempArr = append(tempArr, bson.M{"buyerName": bson.M{"$regex": val}})
+			}
+			kwFilter[0].Value = tempArr
+		}
+
+		// invoice number
+		invoiceNumberFilter := bson.M{}
+		// number, convertErr := strconv.Atoi(body.Filter.InvoiceNumber)
+		if body.Filter.InvoiceNumber != 0 {
+			invoiceNumberFilter["invoiceNumber"] = body.Filter.InvoiceNumber
+		}
+
+		// make mongodb query filter
 		andFilters := bson.A{
 			shippingFilter,
+			invoiceNumberFilter,
 		}
 		// if payment method passed in, append payment method filter
 		if paymentMethodFilter[0].Value != nil {
 			andFilters = append(andFilters, paymentMethodFilter)
 		}
+		// same with invoice status
+		if statusFilter[0].Value != nil {
+			andFilters = append(andFilters, statusFilter)
+		}
+		if kwFilter[0].Value != nil {
+			andFilters = append(andFilters, kwFilter)
+		}
 		// if one of the date range passed in, append the date filter
 		if timeFilter["$gte"] != nil || timeFilter["$lte"] != nil {
 			andFilters = append(andFilters, dateRangeFilter)
+		}
+		if totalFilter["$gte"] != nil || totalFilter["$lte"] != nil {
+			andFilters = append(andFilters, invoiceTotalFilter)
 		}
 		fil := bson.D{
 			{
