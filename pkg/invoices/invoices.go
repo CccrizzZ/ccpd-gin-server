@@ -19,7 +19,6 @@ import (
 	"github.com/dslipak/pdf"
 	"github.com/gin-gonic/gin"
 	"github.com/minio/minio-go/v7"
-	"github.com/sashabaranov/go-openai"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -37,7 +36,6 @@ type Invoice struct {
 	BuyerPhone      string  `json:"buyerPhone" binding:"required" validate:"required"`
 	AuctionLot      int     `json:"auctionLot" binding:"required" validate:"required"`
 	InvoiceTotal    float32 `json:"invoiceTotal" binding:"required"`
-	Message         string  `json:"message" binding:"required" validate:"required"`
 	Items           []InvoiceItem
 }
 
@@ -99,8 +97,8 @@ func UploadInvoice(
 
 // split the invoice text into parts
 // header, items rows, footer
-func splitInvoice(text string) ([]string, error) {
-	var splitArr []string
+func splitInvoice(text string) (map[string]any, error) {
+	var invoiceInfo = map[string]any{}
 
 	// this split the body and header
 	re := regexp.MustCompile(`PRICEEXTENDEDPRICE`)
@@ -112,30 +110,187 @@ func splitInvoice(text string) ([]string, error) {
 	var rest string
 	if index != nil {
 		header := text[:index[1]]
-		fmt.Println(header)
-		splitArr = append(splitArr, header)
+		invoiceInfo["header"] = header
 		rest = text[index[1]:]
 	} else {
-		return splitArr, errors.New("cannot find PRICEEXTENDEDPRICE to split the header")
+		return invoiceInfo, errors.New("cannot find PRICEEXTENDEDPRICE to split the header")
 	}
 
-	fmt.Println(rest)
-
 	// // split the items and footer
-	// itemRe := regexp.MustCompile(`MSRP:\s*\$[\d\.]+\s*([\w\s\-\.,'&;]*)\s*Item handling fee -`)
-	// matches := itemRe.FindAllStringSubmatch(rest, -1)
+	itemRe := regexp.MustCompile(`MSRP:(.*?)Item handling`)
+	matches := itemRe.FindAllStringSubmatch(rest, -1)
 
-	// // store all items in an array
-	// var items []string
-	// for _, match := range matches {
-	// 	if len(match) > 1 {
-	// 		items = append(items, strings.TrimSpace(match[1]))
-	// 	}
-	// }
+	// store all items in an array
+	var invoiceItems []string
+	for _, match := range matches {
+		if len(match) > 1 {
+			invoiceItems = append(invoiceItems, strings.TrimSpace(match[1]))
+		}
+	}
 
-	// print(items)
+	// add invoice items array
+	invoiceInfo["items"] = invoiceItems
 
-	return splitArr, nil
+	// get footer
+	pattern := `\d+\.\d{2}\s*Total Extended Price:`
+	footerRe := regexp.MustCompile(pattern)
+
+	// get match index
+	matchIndex := footerRe.FindStringIndex(rest)
+
+	if matchIndex != nil {
+		after := rest[matchIndex[0]:]
+		invoiceInfo["footer"] = after
+	}
+	fmt.Println(invoiceInfo)
+	return invoiceInfo, nil
+}
+
+func processSplitInvoice(result map[string]any) Invoice {
+	var newInvoice Invoice
+
+	// process header
+	header := result["header"].(string)
+
+	// get auction lot
+	auctionLotPattern := regexp.MustCompile(`Auction Sale - (\d+)`)
+	auctionLotMatch := auctionLotPattern.FindStringSubmatch(header)
+	if len(auctionLotMatch) > 1 {
+		newInvoice.AuctionLot, _ = strconv.Atoi(auctionLotMatch[1])
+	}
+
+	// get invoice number
+	invoiceNumberPattern := regexp.MustCompile(`\s+1\s+(\d+)\s*Auction Sale`)
+	invoiceNumberMatch := invoiceNumberPattern.FindStringSubmatch(header)
+	if len(invoiceNumberMatch) > 1 {
+		newInvoice.InvoiceNumber = strings.TrimSpace(invoiceNumberMatch[1])
+	}
+
+	// get buyer name, address, shipping address, email
+	// check if invoice is shipping
+	isShipping := strings.Contains(header, "SHIP TO:")
+	if isShipping {
+		// email will be in between "ship to:" and "lot #"
+		buyerEmailPattern := regexp.MustCompile(`SHIP TO:\s*(.*?)Lot#`)
+		buyerEmailMatch := buyerEmailPattern.FindStringSubmatch(header)
+		if len(buyerEmailMatch) > 1 {
+			newInvoice.BuyerEmail = strings.TrimSpace(buyerEmailMatch[1])
+		}
+
+		// buyer name and shipping address
+		buyerNameAddressPattern := regexp.MustCompile(`SOLD TO:\s*(.*?)SHIP TO:`)
+		buyerNameAddressPatternMatch := buyerNameAddressPattern.FindStringSubmatch(header)
+		if len(buyerNameAddressPatternMatch) > 1 {
+			buyerInfo := strings.TrimSpace(buyerNameAddressPatternMatch[1])
+
+			// split buyer name and shipping address
+			re := regexp.MustCompile(`\d`)
+			firstNumberIndex := re.FindStringIndex(buyerInfo)
+			if firstNumberIndex != nil {
+				newInvoice.BuyerName = strings.TrimSpace(buyerInfo[:firstNumberIndex[0]])
+				newInvoice.ShippingAddress = strings.TrimSpace(buyerInfo[firstNumberIndex[0]:])
+			}
+		}
+
+	} else {
+		// email will be in between "sold to:" and "lot #"
+		buyerEmailPattern := regexp.MustCompile(`SOLD TO:\s*(.*?)Lot#`)
+		buyerEmailMatch := buyerEmailPattern.FindStringSubmatch(header)
+		if len(buyerEmailMatch) > 1 {
+			newInvoice.BuyerEmail = strings.TrimSpace(buyerEmailMatch[1])
+		}
+	}
+
+	// get buyer address and name
+	// if paid invoice the buyer address regex is different
+	invoicePaid := strings.Contains(header, "PAID IN FULL")
+	var buyerAddressPattern *regexp.Regexp
+	if !invoicePaid {
+		buyerAddressPattern = regexp.MustCompile(`\*\*\d{4}(.*?)Phone`)
+	} else {
+		buyerAddressPattern = regexp.MustCompile(`PAID IN FULL(.*?)Phone`)
+	}
+	buyerAddressPatternMatch := buyerAddressPattern.FindStringSubmatch(header)
+	if len(buyerAddressPatternMatch) > 1 {
+		nameAddress := strings.TrimSpace(buyerAddressPatternMatch[1])
+		// split buyer name and shipping address
+		re := regexp.MustCompile(`\d`)
+		firstNumberIndex := re.FindStringIndex(nameAddress)
+		if firstNumberIndex != nil {
+			if newInvoice.BuyerName == "" {
+				newInvoice.BuyerName = strings.TrimSpace(nameAddress[:firstNumberIndex[0]])
+			}
+			newInvoice.BuyerAddress = strings.TrimSpace(nameAddress[firstNumberIndex[0]:])
+		}
+	}
+
+	// get invoice time
+	timePattern := regexp.MustCompile(`\)\s*(.*?)\s*Invoice #:`)
+	timeMatch := timePattern.FindStringSubmatch(header)
+	if len(timeMatch) > 1 {
+		newInvoice.Time = strings.TrimSpace(timeMatch[1])
+	}
+
+	// buyer phone
+	buyerPhonePattern := regexp.MustCompile(`Phone:\s*(.*?)\s*#`)
+	buyerPhoneMatch := buyerPhonePattern.FindStringSubmatch(header)
+	var buyerPhone string
+	if len(buyerPhoneMatch) > 1 {
+		buyerPhone = strings.TrimSpace(buyerPhoneMatch[1])
+		buyerPhone = strings.ReplaceAll(buyerPhone, "-", "")
+		buyerPhone = strings.ReplaceAll(buyerPhone, " ", "")
+		newInvoice.BuyerPhone = buyerPhone
+	}
+
+	// process invoice items
+	items := result["items"].([]string)
+	var itemsArr []InvoiceItem
+	for _, value := range items {
+		var invoiceItem InvoiceItem
+
+		// get rid of dollar sign and T
+		item := strings.ReplaceAll(value, "$", "")
+		item = strings.ReplaceAll(item, "T", " ")
+		item = strings.TrimSpace(item)
+		// split into string array by space
+		datas := strings.Fields(item)
+
+		// if check for error case
+		// example error case $ 10.98Y17 43430T651 => 10.98Y17 43430 651 (len<4)
+		// example error case $ 27.53 G1043239T563 => 27.53 G1043239 563 (len<4)
+		if len(datas) == 4 {
+			invoiceItem.Msrp = datas[0]
+			invoiceItem.ShelfLocation = datas[1]
+			sku, convertErr := strconv.Atoi(datas[2])
+			if convertErr == nil {
+				invoiceItem.Sku = sku
+			} else {
+				fmt.Println(convertErr.Error())
+			}
+			itemLot, convertErr2 := strconv.Atoi(datas[3])
+			if convertErr2 == nil {
+				invoiceItem.ItemLot = itemLot
+			} else {
+				fmt.Println(convertErr.Error())
+			}
+		} else {
+			// split it by T and take the lot number
+			itemLot, convertErr := strconv.Atoi(datas[len(datas)-1])
+			if convertErr == nil {
+				invoiceItem.ItemLot = itemLot
+			} else {
+				fmt.Println(convertErr.Error())
+			}
+		}
+		itemsArr = append(itemsArr, invoiceItem)
+	}
+
+	newInvoice.Items = itemsArr
+
+	// process footer
+	// footer := result["footer"].(string)
+	fmt.Println(newInvoice)
+	return newInvoice
 }
 
 // generated by chat gpt
@@ -233,186 +388,108 @@ func parseInvoice(text string) Invoice {
 	}
 }
 
-func parseInvoiceWithGPT(text string) (Invoice, error) {
-	ctx := context.Background()
-	var newInvoice Invoice
-	// pull open ai key
-	openAIKey := os.Getenv("OPENAI_API_KEY")
-	if openAIKey == "" {
-		return newInvoice, errors.New("cannot get chat gpt key")
-	}
+// func parseInvoiceWithGPT(text string) (Invoice, error) {
+// 	ctx := context.Background()
+// 	var newInvoice Invoice
+// 	// pull open ai key
+// 	openAIKey := os.Getenv("OPENAI_API_KEY")
+// 	if openAIKey == "" {
+// 		return newInvoice, errors.New("cannot get chat gpt key")
+// 	}
 
-	fmt.Println(text)
+// 	// create gpt client
+// 	client := openai.NewClient(openAIKey)
 
-	// create gpt client
-	client := openai.NewClient(openAIKey)
+// 	// create prompt
+// 	prompt := "Convert the following text extracted from a PDF document into an array of objects with appropriate fields:\n\n"
+// 	prompt += text
+// 	prompt += `
+// 	export type Invoice = {
+// 		invoiceNumber: number,
+// 		buyerName: string,
+// 		buyerEmail: string,
+// 		buyerAddress: string,
+// 		paymentMethod: PaymentMethod,
+// 		auctionLot: number,
+// 		invoiceTotal: number,
+// 		buyersPremium: number,
+// 		totalHandlingFee: number,
+// 		status: InvoiceStatus,
+// 		isShipping: boolean,
+// 		time: string,
+// 		timePickedup: string,
+// 		items: InvoiceItem[],
+// 	} \n
 
-	// create prompt
-	prompt := "Convert the following text extracted from a PDF document into an array of objects with appropriate fields:\n\n"
-	prompt += text
-	// prompt += "\nThe result should be an JSON object. Each string should be appropriately converted into fields of an object. the out put shoud follow this structure: \n\n"
-	prompt += `
-	export type Invoice = {
-		invoiceNumber: number,
-		buyerName: string,
-		buyerEmail: string,
-		buyerAddress: string,
-		paymentMethod: PaymentMethod,
-		auctionLot: number,
-		invoiceTotal: number,
-		buyersPremium: number,
-		totalHandlingFee: number,
-		status: InvoiceStatus,
-		isShipping: boolean,
-		time: string,
-		timePickedup: string,
-		items: InvoiceItem[],
-	} \n
+// 	export type InvoiceItem = {
+// 		sku: number
+// 		unit: number,
+// 		unitPrice: number,
+// 		extendedPrice: number,
+// 		handlingFee: number,
+// 	} \n`
 
-	export type InvoiceItem = {
-		sku: number
-		unit: number,
-		unitPrice: number,
-		extendedPrice: number,
-		handlingFee: number,
-	} \n`
+// 	prompt += `
+// 	when the input is: \n
+// 	"        1      16105Auction Sale - 132 - HIGH/VALUE BOXES/BULK/ELECTRONIC(132)2023-09-25 10:37:54Invoice #:Date:Page:UNPAID2023-09-25 payment declined **2601Grace RoyGrace1600-2300 Young StreetToronto, ON M4P1E4CanadaPhone:647-773-1253# 7104SOLD TO:julius_roy@msn.comLot#DESCRIPTIONQUANTITYUNIT PRICEEXTENDEDPRICE1 x 5.00        5.00Farm Innovators Model HPFLITTLE CRACKED - UNTEST - Farm Innovators Model HPF-100"All-Seasons" Heated Plastic Poultry Fountain, 3 Gallon, Red/White,100-Watt MSRP:$ 74.96 K22 1976T528Item handling fee -         1.00 T  ------------------------------------1 x 5.00        5.00Trampoline Frame Size Replacement NettingN1-1216100000 12 ft. Trampoline Frame Size Replacement NettingMSRP:$ 99.99 H12 10854T788Item handling fee -         1.00 T  ------------------------------------         10.00         1.50Total Extended Price:15% Buyer's Premium:Item handling fee:           2.00          2.00Total Quantity:        1.76Tax1  Default:        $15.26        $15.26Invoice Total:Remaining Invoice Balance:                                  FOR ALL SOLD AS IS ITEMS" \n
+// 	the output should be exactly like with only one object inside the array: \n
+// 		[{
+// 			"invoiceNumber": 16105,
+// 			"buyerName": "Grace Roy",
+// 			"buyerEmail": "julius_roy@msn.com",
+// 			"buyerAddress": "1600-2300 Young Street, Toronto, ON M4P1E4, Canada",
+// 			"shippingAddress": "",
+// 			"paymentMethod": "",
+// 			"auctionLot": 132,
+// 			"invoiceTotal": 15.26,
+// 			"buyersPremium": 1.50,
+// 			"totalHandlingFee": 2.00,
+// 			"status": "UNPAID",
+// 			"isShipping": false,
+// 			"time": "2023-09-25T10:37:54",
+// 			"timePickedup": "",
+// 			"items": [
+// 				{
+// 					"sku": 1976T528,
+// 					"unit": 1,
+// 					"unitPrice": 5.00,
+// 					"extendedPrice": 5.00,
+// 					"handlingFee": 1.00
+// 				},
+// 				{
+// 					"sku": 10854T788,
+// 					"unit": 1,
+// 					"unitPrice": 5.00,
+// 					"extendedPrice": 5.00,
+// 					"handlingFee": 1.00
+// 				}
+// 			]
+// 		}]
+// 	`
+// 	prompt += `If the input string contains "SHIP TO", there are two addresses in there, the first one is "BuyerAddress", the second one is "ShippingAddress", if not set ShippingAddress to nil ("") \n`
+// 	prompt += `the SKU will be both "1976T528" where the input is "1976T528Item handling fee" \n`
+// 	prompt += `"paymentMethod" should be empty string ("") if UNPAID mentioned in the input \n`
+// 	prompt += `the result JSON Array should ONLY have one Invoice object that contains items from all pages \n`
 
-	prompt += `
-	when the input is: \n
-	"        1      16105Auction Sale - 132 - HIGH/VALUE BOXES/BULK/ELECTRONIC(132)2023-09-25 10:37:54Invoice #:Date:Page:UNPAID2023-09-25 payment declined **2601Grace RoyGrace1600-2300 Young StreetToronto, ON M4P1E4CanadaPhone:647-773-1253# 7104SOLD TO:julius_roy@msn.comLot#DESCRIPTIONQUANTITYUNIT PRICEEXTENDEDPRICE1 x 5.00        5.00Farm Innovators Model HPFLITTLE CRACKED - UNTEST - Farm Innovators Model HPF-100"All-Seasons" Heated Plastic Poultry Fountain, 3 Gallon, Red/White,100-Watt MSRP:$ 74.96 K22 1976T528Item handling fee -         1.00 T  ------------------------------------1 x 5.00        5.00Trampoline Frame Size Replacement NettingN1-1216100000 12 ft. Trampoline Frame Size Replacement NettingMSRP:$ 99.99 H12 10854T788Item handling fee -         1.00 T  ------------------------------------         10.00         1.50Total Extended Price:15% Buyer's Premium:Item handling fee:           2.00          2.00Total Quantity:        1.76Tax1  Default:        $15.26        $15.26Invoice Total:Remaining Invoice Balance:                                  FOR ALL SOLD AS IS ITEMS" \n
-	the output should be exactly like with only one object inside the array: \n
-		[{
-			"invoiceNumber": 16105,
-			"buyerName": "Grace Roy",
-			"buyerEmail": "julius_roy@msn.com",
-			"buyerAddress": "1600-2300 Young Street, Toronto, ON M4P1E4, Canada",
-			"shippingAddress": "",
-			"paymentMethod": "",
-			"auctionLot": 132,
-			"invoiceTotal": 15.26,
-			"buyersPremium": 1.50,
-			"totalHandlingFee": 2.00,
-			"status": "UNPAID",
-			"isShipping": false,
-			"time": "2023-09-25T10:37:54",
-			"timePickedup": "",
-			"items": [
-				{
-					"sku": 1976T528,
-					"unit": 1,
-					"unitPrice": 5.00,
-					"extendedPrice": 5.00,
-					"handlingFee": 1.00
-				},
-				{
-					"sku": 10854T788,
-					"unit": 1,
-					"unitPrice": 5.00,
-					"extendedPrice": 5.00,
-					"handlingFee": 1.00
-				}
-			]
-		}]
-	`
-	prompt += `If the input string contains "SHIP TO", there are two addresses in there, the first one is "BuyerAddress", the second one is "ShippingAddress", if not set ShippingAddress to nil ("") \n`
-	// prompt += `The "shelfLocation" will always follow MSRP, starts with an letter followed by 1 or 2 (maximum 3) digit numbers,
-	// the SKU is always the number before "T", the lot number is always the number after "T"
-	// in case where the input is "MSRP:$ 69.46 Y43 26430T1496Item handling fee" should produce: {MSRP: "64.96", shelfLocation: "Y43", SKU: "26430" ,ItemLot: "1496"} the MSRP should be numbers only (without $ sign) \n`
-	prompt += `the SKU will be both "1976T528" where the input is "1976T528Item handling fee" \n`
-	prompt += `"paymentMethod" should be empty string ("") if UNPAID mentioned in the input \n`
-	prompt += `the result JSON Array should ONLY have one Invoice object that contains items from all pages \n`
-
-	// call gpt api
-	res, err := client.CreateChatCompletion(
-		ctx,
-		openai.ChatCompletionRequest{
-			Model:       openai.GPT3Dot5Turbo,
-			MaxTokens:   4000,
-			Temperature: 0,
-			Messages: []openai.ChatCompletionMessage{{
-				Role:    openai.ChatMessageRoleUser,
-				Content: prompt,
-			}},
-		},
-	)
-	if err != nil {
-		return newInvoice, errors.New("cannot get gpt result")
-	}
-	fmt.Println(res.Choices[0].Message.Content)
-	return newInvoice, nil
-}
-
-func extractInvoiceData(rawString string) Invoice {
-	// Clean up the input string
-	cleanedString := strings.TrimSpace(rawString)
-
-	// Define regular expressions for different parts
-	invoiceNumberRe := regexp.MustCompile(`Invoice #:\s*(\d+)`)
-	timeRe := regexp.MustCompile(`(\d{1,2}/\d{1,2}/\d{4} \d{1,2}:\d{2}:\d{2})`)
-	buyerNameRe := regexp.MustCompile(`#\s*\d+\s*([\w\s]+)\s*\d+`)
-	buyerEmailRe := regexp.MustCompile(`SOLD TO:\s*(\S+)`)
-	buyerAddressRe := regexp.MustCompile(`([\d\w\s]+),\s*(\w+),\s*(\w+),\s*(\w+\s*\d+)`)
-	buyerPhoneRe := regexp.MustCompile(`Phone:(\d+)`)
-	auctionLotRe := regexp.MustCompile(`#\s*(\d+)`)
-	invoiceTotalRe := regexp.MustCompile(`Invoice Total:\s*\$([\d\.]+)`)
-
-	// Extract data using the regular expressions
-	invoiceNumber := invoiceNumberRe.FindStringSubmatch(cleanedString)[1]
-	time := timeRe.FindStringSubmatch(cleanedString)[1]
-	buyerName := buyerNameRe.FindStringSubmatch(cleanedString)[1]
-	buyerEmail := buyerEmailRe.FindStringSubmatch(cleanedString)[1]
-	buyerAddressMatches := buyerAddressRe.FindStringSubmatch(cleanedString)
-	buyerAddress := strings.Join(buyerAddressMatches[1:], ", ")
-	buyerPhone := buyerPhoneRe.FindStringSubmatch(cleanedString)[1]
-	auctionLot, _ := strconv.Atoi(auctionLotRe.FindStringSubmatch(cleanedString)[1])
-	invoiceTotal, _ := strconv.ParseFloat(invoiceTotalRe.FindStringSubmatch(cleanedString)[1], 64)
-
-	// Extract items
-	items := extractInvoiceItems(cleanedString)
-
-	return Invoice{
-		InvoiceNumber:   invoiceNumber,
-		Time:            time,
-		BuyerName:       buyerName,
-		BuyerEmail:      buyerEmail,
-		BuyerAddress:    buyerAddress,
-		ShippingAddress: buyerAddress, // Assuming shipping address is the same
-		BuyerPhone:      buyerPhone,
-		AuctionLot:      auctionLot,
-		InvoiceTotal:    float32(invoiceTotal),
-		Items:           items,
-	}
-}
-
-func extractInvoiceItems(cleanedString string) []InvoiceItem {
-	itemRe := regexp.MustCompile(`(\d+ x \d+\.\d+)\s*(\d+\.\d+)\s*([\w\s\-]+)\s*([\w\s\-]+)\s*MSRP:\$([\d\.]+)\s*(\w\d+)\s*(\d+)T(\d+)\s*Item handling fee\s*\-\s*(\d+\.\d+)`)
-	itemMatches := itemRe.FindAllStringSubmatch(cleanedString, -1)
-
-	var items []InvoiceItem
-	for _, match := range itemMatches {
-		unit, _ := strconv.Atoi(strings.Split(match[1], " x ")[0])
-		unitPrice, _ := strconv.ParseFloat(strings.Split(match[1], " x ")[1], 64)
-		extendedPrice, _ := strconv.ParseFloat(match[2], 64)
-		handlingFee, _ := strconv.ParseFloat(match[9], 64)
-		sku, _ := strconv.Atoi(match[6])
-		itemLot, _ := strconv.Atoi(match[8])
-
-		item := InvoiceItem{
-			Sku:           sku,
-			Msrp:          match[5],
-			ShelfLocation: match[6],
-			ItemLot:       itemLot,
-			Desc:          match[3] + " " + match[4],
-			Unit:          unit,
-			UnitPrice:     float32(unitPrice),
-			ExtendedPrice: float32(extendedPrice),
-			HandlingFee:   float32(handlingFee),
-		}
-		items = append(items, item)
-	}
-
-	return items
-}
+// 	// call gpt api
+// 	res, err := client.CreateChatCompletion(
+// 		ctx,
+// 		openai.ChatCompletionRequest{
+// 			Model:       openai.GPT3Dot5Turbo,
+// 			MaxTokens:   4000,
+// 			Temperature: 0,
+// 			Messages: []openai.ChatCompletionMessage{{
+// 				Role:    openai.ChatMessageRoleUser,
+// 				Content: prompt,
+// 			}},
+// 		},
+// 	)
+// 	if err != nil {
+// 		return newInvoice, errors.New("cannot get gpt result")
+// 	}
+// 	fmt.Println(res.Choices[0].Message.Content)
+// 	return newInvoice, nil
+// }
 
 // this one only process UNPAID invoice pdf
 func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
@@ -541,25 +618,20 @@ func CreateInvoiceFromPDF(storageClient *minio.Client) gin.HandlerFunc {
 			extractedText = strings.ReplaceAll(extractedText, val, "")
 		}
 
-		// parse text with chat gpt
-		// res, gptErr := parseInvoiceWithGPT(extractedText)
-		// if gptErr != nil {
-		// 	fmt.Println(gptErr.Error())
-		// 	c.String(http.StatusInternalServerError, gptErr.Error())
-		// }
+		// splite invoice text into 3 parts (header, items, footer)
 		re, splitErr := splitInvoice(extractedText)
 		if splitErr != nil {
-			fmt.Println(textErr.Error())
+			fmt.Println(splitErr.Error())
 			c.String(http.StatusInternalServerError, splitErr.Error())
 			return
 		}
-		res := parseInvoice(extractedText)
-		// res := extractInvoiceData(extractedText)
-		fmt.Println(re)
+
+		invoice := processSplitInvoice(re)
+		fmt.Println(invoice)
 
 		// return invoice object
 		c.JSON(http.StatusOK, gin.H{
-			"data": res,
+			"data": invoice,
 		})
 	}
 }
