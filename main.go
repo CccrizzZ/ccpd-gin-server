@@ -35,6 +35,7 @@ func main() {
 	contactMessegesCollection := mongoClient.Database("CCPD").Collection("ContactMesseges")
 	pageContenCollection := mongoClient.Database("CCPD").Collection("PageContent")
 	invoicesCollection := mongoClient.Database("CCPD").Collection("Invoices")
+	remainingCollection := mongoClient.Database("CCPD").Collection("RemainingHistory")
 
 	// digital ocean space object storage
 	spaceObjectStorageClient := do.InitSpaceObjectStorage()
@@ -106,7 +107,7 @@ func main() {
 
 	// invoices controller
 	r.POST("/getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
-	r.POST("/createInvoiceFromPdf", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoiceFromPDF(spaceObjectStorageClient))
+	r.POST("/createInvoiceFromPdf", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoiceFromPDF(spaceObjectStorageClient, remainingCollection))
 	// r.POST("/convertAllTimes", invoices.ConvertAllTimes(invoicesCollection))
 
 	r.Run(":3000")
