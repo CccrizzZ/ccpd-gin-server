@@ -97,7 +97,7 @@ func UploadInvoice(
 }
 
 // fill in the blank for invoice item array
-// the invoice here is a reference
+// the invoice here is a reference the passed in variable will be modified
 func FillItemDataFromDB(invoice *Invoice, client *mongo.Collection) error {
 	ctx := context.Background()
 
@@ -112,6 +112,7 @@ func FillItemDataFromDB(invoice *Invoice, client *mongo.Collection) error {
 			},
 		}
 
+		// find item in remaining record
 		var res bson.M
 		err := client.FindOne(ctx, fil, options.FindOne().SetProjection(bson.M{})).Decode(res)
 		if err != nil {
@@ -292,7 +293,17 @@ func processSplitInvoice(result map[string]any) Invoice {
 	timePattern := regexp.MustCompile(`\)\s*(.*?)\s*Invoice #:`)
 	timeMatch := timePattern.FindStringSubmatch(header)
 	if len(timeMatch) > 1 {
-		newInvoice.Time = strings.TrimSpace(timeMatch[1])
+		fmt.Println(timeMatch[1])
+		// convert time into iso format
+		var parsedTime, err = time.Parse("2006-01-02 15:04:05", strings.TrimSpace(timeMatch[1]))
+		if err != nil {
+			parsedTime, err = time.Parse("1/2/2006 3:04:05", strings.TrimSpace(timeMatch[1]))
+			if err != nil {
+				fmt.Println("cannot parse time")
+			}
+		}
+		isoTime := parsedTime.Format(time.RFC3339)
+		newInvoice.Time = isoTime
 	}
 
 	// buyer phone
@@ -342,6 +353,18 @@ func processSplitInvoice(result map[string]any) Invoice {
 				fmt.Println(convertErr.Error())
 			}
 		} else {
+			// find the msrp by regex
+			msrpPattern := regexp.MustCompile(`\$(.*?)[A-Za-z]`)
+			msrpMatch := msrpPattern.FindStringSubmatch(value)
+			if len(msrpMatch) > 1 {
+				trimmed := strings.TrimSpace(msrpMatch[1])
+				msrp, convertErr := strconv.ParseFloat(trimmed, 32)
+				if convertErr != nil {
+					fmt.Println(convertErr.Error())
+				}
+				invoiceItem.Msrp = float32(msrp)
+			}
+
 			// split it by T and take the lot number
 			itemLot, convertErr := strconv.Atoi(datas[len(datas)-1])
 			if convertErr == nil {
@@ -422,10 +445,17 @@ func parseInvoice(text string) Invoice {
 	// Extract time
 	timePattern := regexp.MustCompile(`(\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}:\d{2})`)
 	timeMatch := timePattern.FindStringSubmatch(text)
-	var time string
+	var invoiceTime string
 	if len(timeMatch) > 1 {
-		time = strings.TrimSpace(timeMatch[1])
+		invoiceTime = strings.TrimSpace(timeMatch[1])
 	}
+
+	// convert time into iso format
+	parsedTime, err := time.Parse("1/2/2006 3:04:05", invoiceTime)
+	if err != nil {
+		log.Fatal("cannot parse time")
+	}
+	isoTime := parsedTime.Format(timeFormat)
 
 	// buyer name & address
 	buyerNamePattern := regexp.MustCompile(`SOLD TO:\s*(.*?)SHIP TO:`)
@@ -486,7 +516,7 @@ func parseInvoice(text string) Invoice {
 		AuctionLot:    auctionLot,
 		BuyerName:     buyerName,
 		Items:         items,
-		Time:          time,
+		Time:          isoTime,
 		BuyerEmail:    buyerEmail,
 		BuyerAddress:  buyerAddress,
 		BuyerPhone:    buyerPhone,
@@ -732,9 +762,9 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 			return
 		}
 
+		// split and extract data with regex
 		invoice := processSplitInvoice(re)
 		fillErr := FillItemDataFromDB(&invoice, mongoClient)
-
 		if fillErr != nil {
 			fmt.Println(fillErr)
 		}
@@ -966,36 +996,36 @@ func GetChartData(collection *mongo.Collection) gin.HandlerFunc {
 }
 
 // convert all time strings to RFC3339 format
-func ConvertAllTimes(collection *mongo.Collection) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ctx := context.Background()
-		cursor, err := collection.Find(ctx, bson.M{"time": bson.M{"$exists": true}}, nil)
-		if err != nil {
-			log.Fatal("cannot find")
-		}
-		defer cursor.Close(ctx)
-		for cursor.Next(ctx) {
-			var document bson.M
-			err := cursor.Decode(&document)
-			if err != nil {
-				log.Fatal("cannot decode cursor")
-			}
-			parsedTime, err := time.Parse("1/2/2006, 3:04:05 PM", document["time"].(string))
-			if err != nil {
-				log.Fatal("cannot parse time")
-			}
-			newTime := parsedTime.Format(timeFormat)
-			fmt.Println(newTime)
-			updateOption := bson.M{
-				"$set": bson.M{
-					"time": newTime,
-				},
-			}
-			_, updateErr := collection.UpdateOne(ctx, bson.M{"_id": document["_id"]}, updateOption)
-			if updateErr != nil {
-				log.Fatal("Cannot update")
-			}
-		}
-		c.String(200, "Pass")
-	}
-}
+// func ConvertAllTimes(collection *mongo.Collection) gin.HandlerFunc {
+// 	return func(c *gin.Context) {
+// 		ctx := context.Background()
+// 		cursor, err := collection.Find(ctx, bson.M{"time": bson.M{"$exists": true}}, nil)
+// 		if err != nil {
+// 			log.Fatal("cannot find")
+// 		}
+// 		defer cursor.Close(ctx)
+// 		for cursor.Next(ctx) {
+// 			var document bson.M
+// 			err := cursor.Decode(&document)
+// 			if err != nil {
+// 				log.Fatal("cannot decode cursor")
+// 			}
+// 			parsedTime, err := time.Parse("1/2/2006, 3:04:05 PM", document["time"].(string))
+// 			if err != nil {
+// 				log.Fatal("cannot parse time")
+// 			}
+// 			newTime := parsedTime.Format(timeFormat)
+// 			fmt.Println(newTime)
+// 			updateOption := bson.M{
+// 				"$set": bson.M{
+// 					"time": newTime,
+// 				},
+// 			}
+// 			_, updateErr := collection.UpdateOne(ctx, bson.M{"_id": document["_id"]}, updateOption)
+// 			if updateErr != nil {
+// 				log.Fatal("Cannot update")
+// 			}
+// 		}
+// 		c.String(200, "Pass")
+// 	}
+// }
