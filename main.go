@@ -89,6 +89,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to get Firebase auth client: %v", err)
 	}
+
+	// use fb auth on all route
 	// r.Use(auth.FirebaseAuthMiddleware(firebaseAuthClient))
 
 	// contact form controller
@@ -108,6 +110,7 @@ func main() {
 	// invoices controller
 	r.POST("/getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
 	r.POST("/createInvoiceFromPdf", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoiceFromPDF(spaceObjectStorageClient, remainingCollection))
+	r.POST("/updateInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.UpdateInvoice(invoicesCollection))
 	// r.POST("/convertAllTimes", invoices.ConvertAllTimes(invoicesCollection))
 
 	r.Run(":3000")

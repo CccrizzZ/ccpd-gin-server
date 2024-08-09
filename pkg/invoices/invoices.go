@@ -27,31 +27,41 @@ import (
 var timeFormat string = "2006-01-02T15:04:05Z07:00"
 
 type Invoice struct {
-	InvoiceNumber    string  `json:"invoiceNumber" binding:"required" validate:"required"`
-	Time             string  `json:"time" binding:"required" validate:"required"`
-	BuyerName        string  `json:"buyerName" binding:"required" validate:"required"`
-	BuyerEmail       string  `json:"buyerEmail" binding:"required" validate:"required"`
-	BuyerAddress     string  `json:"buyerAddress" binding:"required" validate:"required"`
-	ShippingAddress  string  `json:"shippingAddress" binding:"required" validate:"required"`
-	BuyerPhone       string  `json:"buyerPhone" binding:"required" validate:"required"`
-	AuctionLot       int     `json:"auctionLot" binding:"required" validate:"required"`
-	InvoiceTotal     float32 `json:"invoiceTotal" binding:"required"`
-	RemainingBalance float32 `json:"remainingBalance" binding:"required"`
-	Tax              float32 `json:"tax" binding:"required"`
-	Items            []InvoiceItem
+	InvoiceNumber    string         `json:"invoiceNumber" bson:"invoiceNumber" binding:"required" validate:"required"`
+	Time             string         `json:"time" bson:"time" binding:"required" validate:"required"`
+	BuyerName        string         `json:"buyerName" bson:"buyerName" binding:"required" validate:"required"`
+	BuyerEmail       string         `json:"buyerEmail" bson:"buyerEmail" binding:"required" validate:"required"`
+	BuyerAddress     string         `json:"buyerAddress" bson:"buyerAddress"`
+	ShippingAddress  string         `json:"shippingAddress" bson:"shippingAddress"`
+	BuyerPhone       string         `json:"buyerPhone" bson:"buyerPhone"`
+	AuctionLot       int            `json:"auctionLot" bson:"auctionLot" binding:"required" validate:"required"`
+	InvoiceTotal     float32        `json:"invoiceTotal" bson:"invoiceTotal"`
+	RemainingBalance float32        `json:"remainingBalance" bson:"remainingBalance"`
+	Tax              float32        `json:"tax" bson:"tax"`
+	TotalHandlingFee float32        `json:"totalHandlingFee" bson:"totalHandlingFee"`
+	PaymentMethod    string         `json:"paymentMethod" bson:"paymentMethod"`
+	InvoiceEvent     []InvoiceEvent `json:"invoiceEvent" bson:"invoiceEvent"`
+	Items            []InvoiceItem  `json:"items" bson:"items"`
+}
+
+type InvoiceEvent struct {
+	Desc  string `json:"desc" bson:"desc"`
+	Title string `json:"title" bson:"title"`
+	Time  string `json:"time" bson:"time"`
 }
 
 type InvoiceItem struct {
-	Sku           int     `json:"sku"`
-	Msrp          float32 `json:"msrp"`
-	ShelfLocation string  `json:"shelfLocation"`
-	ItemLot       int     `json:"itemLot"`
-	Desc          string  `json:"description"`
-	Bid           float32 `json:"bid"`
-	ExtendedPrice float32 `json:"extendedPrice"` // unit * unitPrice
-	HandlingFee   float32 `json:"handlingFee"`
+	Sku           int     `json:"sku" bson:"sku"`
+	Msrp          float32 `json:"msrp" bson:"msrp"`
+	ShelfLocation string  `json:"shelfLocation" bson:"shelfLocation"`
+	ItemLot       int     `json:"itemLot" bson:"itemLot"`
+	Desc          string  `json:"description" bson:"description"`
+	Bid           float32 `json:"bid" bson:"bid"`
+	ExtendedPrice float32 `json:"extendedPrice" bson:"extendedPrice"` // unit * unitPrice
+	HandlingFee   float32 `json:"handlingFee" bson:"handlingFee"`
 }
 
+// manually create invoice
 func CreateInvoice() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// ctx := context.Background()
@@ -376,6 +386,8 @@ func processSplitInvoice(result map[string]any) Invoice {
 		itemsArr = append(itemsArr, invoiceItem)
 	}
 
+	// get handling fees for each item and calculate total
+	var totalHandlingFee float32
 	itemsHandlingFees := result["itemHandlingFees"].([]string)
 	for index, val := range itemsHandlingFees {
 		f, err := strconv.ParseFloat(val, 32)
@@ -383,8 +395,13 @@ func processSplitInvoice(result map[string]any) Invoice {
 			fmt.Println(err.Error())
 		}
 		itemsArr[index].HandlingFee = float32(f)
+		totalHandlingFee += float32(f)
 	}
 
+	// set total handling fee
+	newInvoice.TotalHandlingFee = totalHandlingFee
+
+	// set items array
 	newInvoice.Items = itemsArr
 
 	// process footer
@@ -645,6 +662,21 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 			c.String(http.StatusBadRequest, "No Upload PDF Option Passed")
 		}
 
+		// multiple pdf
+		// // Loop through all files in data form
+		// for name, files := range form.File {
+		// 	// open every file and upload
+		// 	for _, fileHeader := range files {
+		// 		if fileHeader.Size > 10*1024*1024 {
+		// 			c.String(http.StatusBadRequest, "File Size Must Not Exceed 10 MB")
+		// 			break
+		// 		}
+
+		// 	}
+
+		// 	fmt.Println(name)
+		// }
+
 		// open file from request
 		file, header, err := c.Request.FormFile("file")
 		if err != nil {
@@ -701,19 +733,6 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 			c.String(http.StatusInternalServerError, "Error Writing Temp File: %v", copyErr.Error())
 			return
 		}
-
-		// multiple pdf
-		// // Loop through all files in data form
-		// for name, files := range form.File {
-		// 	// open every file and upload
-		// 	for _, fileHeader := range files {
-		// 		if fileHeader.Size > 10*1024*1024 {
-		// 			c.String(http.StatusBadRequest, "File Size Must Not Exceed 10 MB")
-		// 			break
-		// 		}
-		// 	}
-		// 	fmt.Println(name)
-		// }
 
 		// get file size
 		tmpFileInformation, fileInfoErr := tmp.Stat()
@@ -773,6 +792,45 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 		c.JSON(http.StatusOK, gin.H{
 			"data": invoice,
 		})
+	}
+}
+
+func UpdateInvoice(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+
+		// bind json from request
+		var newInvoice Invoice
+		bindErr := c.ShouldBindJSON(&newInvoice)
+		if bindErr != nil {
+			fmt.Println(bindErr)
+			c.String(http.StatusBadRequest, "Invalid Body")
+			return
+		}
+		fmt.Println("newInvoice:")
+		fmt.Println(newInvoice)
+
+		// in, err := strconv.ParseInt(newInvoice.InvoiceNumber, 0, 32)
+		// if err != nil {
+		// 	c.String(400, "Cannot Convert Invoice Number to Int")
+		// }
+
+		// find and update
+		res := collection.FindOneAndUpdate(
+			ctx,
+			bson.M{
+				"auctionLot": newInvoice.AuctionLot,
+				"buyerName":  newInvoice.BuyerName,
+				"time":       newInvoice.Time,
+			},
+			bson.M{"$set": newInvoice},
+			options.FindOneAndUpdate().SetReturnDocument(options.After),
+		)
+		var result bson.M
+		decodeErr := res.Decode(&result)
+		if result != nil && decodeErr != nil {
+			c.String(200, "Update Success")
+		}
 	}
 }
 
