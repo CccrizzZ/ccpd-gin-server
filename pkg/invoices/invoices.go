@@ -34,10 +34,11 @@ type Invoice struct {
 	BuyerAddress     string         `json:"buyerAddress" bson:"buyerAddress"`
 	ShippingAddress  string         `json:"shippingAddress" bson:"shippingAddress"`
 	BuyerPhone       string         `json:"buyerPhone" bson:"buyerPhone"`
-	AuctionLot       int            `json:"auctionLot" bson:"auctionLot" binding:"required" validate:"required"`
+	AuctionLot       int            `json:"auctionLot" bson:"auctionLot"`
 	InvoiceTotal     float32        `json:"invoiceTotal" bson:"invoiceTotal"`
 	RemainingBalance float32        `json:"remainingBalance" bson:"remainingBalance"`
 	Tax              float32        `json:"tax" bson:"tax"`
+	Status           string         `json:"status" bson:"status"`
 	TotalHandlingFee float32        `json:"totalHandlingFee" bson:"totalHandlingFee"`
 	PaymentMethod    string         `json:"paymentMethod" bson:"paymentMethod"`
 	InvoiceEvent     []InvoiceEvent `json:"invoiceEvent" bson:"invoiceEvent"`
@@ -59,19 +60,6 @@ type InvoiceItem struct {
 	Bid           float32 `json:"bid" bson:"bid"`
 	ExtendedPrice float32 `json:"extendedPrice" bson:"extendedPrice"` // unit * unitPrice
 	HandlingFee   float32 `json:"handlingFee" bson:"handlingFee"`
-}
-
-// manually create invoice
-func CreateInvoice() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// ctx := context.Background()
-		var newInvoice Invoice
-		bindErr := c.ShouldBindJSON(&newInvoice)
-		if bindErr != nil {
-			c.String(http.StatusBadRequest, "Invalid Body")
-			return
-		}
-	}
 }
 
 // upload single invoice pdf to digital ocean space object storage
@@ -281,8 +269,14 @@ func processSplitInvoice(result map[string]any) Invoice {
 	invoicePaid := strings.Contains(header, "PAID IN FULL")
 	var buyerAddressPattern *regexp.Regexp
 	if !invoicePaid {
+		newInvoice.Status = "unpaid"
 		buyerAddressPattern = regexp.MustCompile(`\*\*\d{4}(.*?)Phone`)
 	} else {
+		newInvoice.Status = "paid"
+		isCard := strings.Contains(header, "Auth#")
+		if isCard {
+			newInvoice.PaymentMethod = "card"
+		}
 		buyerAddressPattern = regexp.MustCompile(`PAID IN FULL(.*?)Phone`)
 	}
 	buyerAddressPatternMatch := buyerAddressPattern.FindStringSubmatch(header)
@@ -649,11 +643,11 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 	return func(c *gin.Context) {
 		ctx := context.Background()
 		// get files from form
-		// form, err := c.MultipartForm()
-		// if err != nil {
-		// 	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		// 	return
-		// }
+		form, err := c.MultipartForm()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 
 		// parse upload pdf option from form value
 		uploadPDF := c.Request.FormValue("uploadPDF")
@@ -661,102 +655,6 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 		if err != nil {
 			c.String(http.StatusBadRequest, "No Upload PDF Option Passed")
 		}
-
-		// multiple pdf
-		// // Loop through all files in data form
-		// for name, files := range form.File {
-		// 	// open every file and upload
-		// 	for _, fileHeader := range files {
-		// 		if fileHeader.Size > 10*1024*1024 {
-		// 			c.String(http.StatusBadRequest, "File Size Must Not Exceed 10 MB")
-		// 			break
-		// 		}
-
-		// 	}
-
-		// 	fmt.Println(name)
-		// }
-
-		// open file from request
-		file, header, err := c.Request.FormFile("file")
-		if err != nil {
-			c.String(http.StatusBadRequest, "Cannot Read File")
-			return
-		}
-		defer file.Close()
-
-		// Check the file extension
-		if filepath.Ext(header.Filename) != ".pdf" {
-			c.String(http.StatusBadRequest, "Please Only Upload PDF File")
-			return
-		}
-
-		// check file size
-		if header.Size > 10*1024*1024 {
-			c.String(http.StatusBadRequest, "File Size Must Not Exceed 10 MB")
-			return
-		}
-
-		// check if bucket exist
-		exists, existErr := storageClient.BucketExists(ctx, "Invoices")
-		if existErr != nil || !exists {
-			c.String(http.StatusInternalServerError, "Bucket Not Exist")
-			return
-		}
-
-		// upload invoice to space object storage if uploadPDF in form is true
-		if toUpload {
-			cdnLink := UploadInvoice(ctx, storageClient, file, header)
-			fmt.Println(cdnLink)
-		}
-
-		// create temp file from buffer
-		tmp, createErr := os.CreateTemp("./", "*.pdf")
-		if createErr != nil {
-			c.String(http.StatusInternalServerError, "Error Creating Temp File: %v", createErr.Error())
-			return
-		}
-		defer func() {
-			closeErr := tmp.Close()
-			if closeErr != nil {
-				fmt.Println(closeErr.Error())
-			}
-			removeErr := os.Remove(tmp.Name())
-			if removeErr != nil {
-				fmt.Println(removeErr.Error())
-			}
-		}()
-
-		// write data into tmp file
-		var _, copyErr = io.Copy(tmp, file)
-		if copyErr != nil {
-			c.String(http.StatusInternalServerError, "Error Writing Temp File: %v", copyErr.Error())
-			return
-		}
-
-		// get file size
-		tmpFileInformation, fileInfoErr := tmp.Stat()
-		if fileInfoErr != nil {
-			tmp.Close()
-			c.String(http.StatusInternalServerError, fileInfoErr.Error())
-		}
-
-		// make reader
-		pdfObj, readerErr := pdf.NewReader(tmp, tmpFileInformation.Size())
-		if readerErr != nil {
-			tmp.Close()
-			c.String(http.StatusInternalServerError, readerErr.Error())
-		}
-
-		// read plain text into buffer
-		var buf bytes.Buffer
-		reader, textErr := pdfObj.GetPlainText()
-		if textErr != nil {
-			fmt.Println(textErr.Error())
-			c.String(http.StatusInternalServerError, textErr.Error())
-			return
-		}
-		buf.ReadFrom(reader)
 
 		// remove header and footer
 		textToRemoveArr := []string{
@@ -768,29 +666,119 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 			"NO RETURN AND REFUND",
 			"#:Date:Page:UNPAIDLot#DESCRIPTIONUNIT PRICEEXTENDEDPRICE",
 		}
-		extractedText := buf.String()
-		for _, val := range textToRemoveArr {
-			extractedText = strings.ReplaceAll(extractedText, val, "")
-		}
 
-		// splite invoice text into 3 parts (header, items, footer)
-		re, splitErr := splitInvoice(extractedText)
-		if splitErr != nil {
-			fmt.Println(splitErr.Error())
-			c.String(http.StatusInternalServerError, splitErr.Error())
-			return
-		}
+		var invoices []Invoice
+		// multiple pdf
+		for name, files := range form.File {
+			// open every file and upload
+			for _, fileHeader := range files {
+				// chekc file size
+				if fileHeader.Size > 10*1024*1024 {
+					c.String(http.StatusBadRequest, "File Size Must Not Exceed 10 MB")
+					break
+				}
 
-		// split and extract data with regex
-		invoice := processSplitInvoice(re)
-		fillErr := FillItemDataFromDB(&invoice, mongoClient)
-		if fillErr != nil {
-			fmt.Println(fillErr)
+				// open file from file handler
+				file, err := fileHeader.Open()
+				if err != nil {
+					c.String(http.StatusBadRequest, "Cannot Read File")
+					return
+				}
+				defer file.Close()
+
+				// Check the file extension
+				if filepath.Ext(name) != ".pdf" {
+					c.String(http.StatusBadRequest, "Please Only Upload PDF File")
+					return
+				}
+
+				// upload invoice to space object storage if uploadPDF in form is true
+				if toUpload {
+					// check if bucket exist
+					exists, existErr := storageClient.BucketExists(ctx, "Invoices")
+					if existErr != nil || !exists {
+						c.String(http.StatusInternalServerError, "Bucket Not Exist")
+						return
+					}
+					cdnLink := UploadInvoice(ctx, storageClient, file, fileHeader)
+					fmt.Println(cdnLink)
+				}
+
+				// create temp file from buffer
+				tmp, createErr := os.CreateTemp("./", "*.pdf")
+				if createErr != nil {
+					c.String(http.StatusInternalServerError, "Error Creating Temp File: %v", createErr.Error())
+					return
+				}
+				defer func() {
+					closeErr := tmp.Close()
+					if closeErr != nil {
+						fmt.Println(closeErr.Error())
+					}
+					removeErr := os.Remove(tmp.Name())
+					if removeErr != nil {
+						fmt.Println(removeErr.Error())
+					}
+				}()
+
+				// write data into tmp file
+				var _, copyErr = io.Copy(tmp, file)
+				if copyErr != nil {
+					c.String(http.StatusInternalServerError, "Error Writing Temp File: %v", copyErr.Error())
+					return
+				}
+
+				// get file size
+				tmpFileInformation, fileInfoErr := tmp.Stat()
+				if fileInfoErr != nil {
+					tmp.Close()
+					c.String(http.StatusInternalServerError, fileInfoErr.Error())
+				}
+
+				// make reader
+				pdfObj, readerErr := pdf.NewReader(tmp, tmpFileInformation.Size())
+				if readerErr != nil {
+					tmp.Close()
+					c.String(http.StatusInternalServerError, readerErr.Error())
+				}
+
+				// read plain text into buffer
+				var buf bytes.Buffer
+				reader, textErr := pdfObj.GetPlainText()
+				if textErr != nil {
+					fmt.Println(textErr.Error())
+					c.String(http.StatusInternalServerError, textErr.Error())
+					return
+				}
+
+				// remove unwanted text
+				buf.ReadFrom(reader)
+				extractedText := buf.String()
+				for _, val := range textToRemoveArr {
+					extractedText = strings.ReplaceAll(extractedText, val, "")
+				}
+
+				// splite invoice text into 3 parts (header, items, footer)
+				re, splitErr := splitInvoice(extractedText)
+				if splitErr != nil {
+					fmt.Println(splitErr.Error())
+					c.String(http.StatusInternalServerError, splitErr.Error())
+					return
+				}
+
+				// split and extract data with regex
+				invoice := processSplitInvoice(re)
+				fillErr := FillItemDataFromDB(&invoice, mongoClient)
+				if fillErr != nil {
+					fmt.Println(fillErr)
+				}
+				invoices = append(invoices, invoice)
+			}
 		}
 
 		// return invoice object
 		c.JSON(http.StatusOK, gin.H{
-			"data": invoice,
+			"data": invoices,
 		})
 	}
 }
@@ -834,6 +822,49 @@ func UpdateInvoice(collection *mongo.Collection) gin.HandlerFunc {
 	}
 }
 
+// push invoice data to database
+func CreateInvoice(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		// bind json
+		var newInvoice []Invoice
+		bindErr := c.ShouldBindJSON(&newInvoice)
+		if bindErr != nil {
+			fmt.Println(bindErr.Error())
+			c.String(http.StatusBadRequest, "Invalid Body")
+			return
+		}
+
+		// loop all invoices
+		for _, invoice := range newInvoice {
+			count, err := collection.CountDocuments(
+				ctx,
+				bson.M{
+					"buyerName":     invoice.BuyerName,
+					"invoiceNumber": invoice.InvoiceNumber,
+				},
+			)
+			if err != nil {
+				c.String(500, "Cannot Count Documents")
+				return
+			}
+
+			// if not found, insert it into db
+			if count == 0 {
+				_, err := collection.InsertOne(ctx, invoice)
+				if err != nil {
+					c.String(500, "Cannot Insert Documents")
+					return
+				}
+			} else {
+				c.String(500, "Documents Exists")
+				return
+			}
+		}
+		c.String(200, "Invoices Uploaded")
+	}
+}
+
 type Range struct {
 	Min float64 `json:"min"`
 	Max float64 `json:"max"`
@@ -848,7 +879,7 @@ type InvoiceFilter struct {
 	ToDate            string   `json:"toDate"`
 	InvoiceTotalRange Range    `json:"invoiceTotalRange" binding:"required"`
 	Keyword           *string  `json:"keyword" binding:"required"`
-	InvoiceNumber     int      `json:"invoiceNumber"`
+	InvoiceNumber     string   `json:"invoiceNumber"`
 }
 
 type GetInvoiceRequest struct {
@@ -969,7 +1000,7 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 		// invoice number
 		invoiceNumberFilter := bson.M{}
 		// number, convertErr := strconv.Atoi(body.Filter.InvoiceNumber)
-		if body.Filter.InvoiceNumber != 0 {
+		if body.Filter.InvoiceNumber != "" {
 			invoiceNumberFilter["invoiceNumber"] = body.Filter.InvoiceNumber
 		}
 
