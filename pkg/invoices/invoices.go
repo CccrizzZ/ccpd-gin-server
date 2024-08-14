@@ -37,12 +37,13 @@ type Invoice struct {
 	AuctionLot       int            `json:"auctionLot" bson:"auctionLot"`
 	InvoiceTotal     float32        `json:"invoiceTotal" bson:"invoiceTotal"`
 	RemainingBalance float32        `json:"remainingBalance" bson:"remainingBalance"`
-	Tax              float32        `json:"tax" bson:"tax"`
+	Tax              float64        `json:"tax" bson:"tax"`
 	Status           string         `json:"status" bson:"status"`
 	TotalHandlingFee float32        `json:"totalHandlingFee" bson:"totalHandlingFee"`
 	PaymentMethod    string         `json:"paymentMethod" bson:"paymentMethod"`
 	InvoiceEvent     []InvoiceEvent `json:"invoiceEvent" bson:"invoiceEvent"`
 	Items            []InvoiceItem  `json:"items" bson:"items"`
+	IsShipping       bool           `json:"isShipping" bson:"isShipping"`
 }
 
 type InvoiceEvent struct {
@@ -212,8 +213,10 @@ func splitInvoice(text string) (map[string]any, error) {
 func processSplitInvoice(result map[string]any) Invoice {
 	var newInvoice Invoice
 
-	// process header
+	//  header items footer
 	header := result["header"].(string)
+	items := result["items"].([]string)
+	footer := result["footer"].(string)
 
 	// get auction lot
 	auctionLotPattern := regexp.MustCompile(`Auction Sale - (\d+)`)
@@ -233,6 +236,9 @@ func processSplitInvoice(result map[string]any) Invoice {
 	// check if invoice is shipping
 	isShipping := strings.Contains(header, "SHIP TO:")
 	if isShipping {
+		// set invoice status
+		newInvoice.IsShipping = true
+
 		// email will be in between "ship to:" and "lot #"
 		buyerEmailPattern := regexp.MustCompile(`SHIP TO:\s*(.*?)Lot#`)
 		buyerEmailMatch := buyerEmailPattern.FindStringSubmatch(header)
@@ -254,7 +260,6 @@ func processSplitInvoice(result map[string]any) Invoice {
 				newInvoice.ShippingAddress = strings.TrimSpace(buyerInfo[firstNumberIndex[0]:])
 			}
 		}
-
 	} else {
 		// email will be in between "sold to:" and "lot #"
 		buyerEmailPattern := regexp.MustCompile(`SOLD TO:\s*(.*?)Lot#`)
@@ -264,6 +269,41 @@ func processSplitInvoice(result map[string]any) Invoice {
 		}
 	}
 
+	// get invoice total and remaining balance
+	invoiceBalancePattern := regexp.MustCompile(`Default:\s*(.*?)\s*Invoice Total:`)
+	invoiceBalanceMatch := invoiceBalancePattern.FindStringSubmatch(footer)
+	if len(invoiceBalanceMatch) > 1 {
+		res := strings.TrimSpace(invoiceBalanceMatch[1])
+		clean := strings.ReplaceAll(res, "$", " ")
+		parts := strings.Fields(clean)
+		total, totalErr := strconv.ParseFloat(parts[0], 32)
+		if totalErr != nil {
+			fmt.Println(totalErr.Error())
+		}
+		remaining, remainingErr := strconv.ParseFloat(parts[1], 32)
+		if remainingErr != nil {
+			fmt.Println(remainingErr.Error())
+		}
+		newInvoice.InvoiceTotal = float32(total)
+		newInvoice.RemainingBalance = float32(remaining)
+	}
+
+	// get invoice time
+	timePattern := regexp.MustCompile(`\)\s*(.*?)\s*Invoice #:`)
+	timeMatch := timePattern.FindStringSubmatch(header)
+	if len(timeMatch) > 1 {
+		// convert time into iso format
+		var parsedTime, err = time.Parse("2006-01-02 15:04:05", strings.TrimSpace(timeMatch[1]))
+		if err != nil {
+			parsedTime, err = time.Parse("1/2/2006 3:04:05", strings.TrimSpace(timeMatch[1]))
+			if err != nil {
+				fmt.Println("cannot parse time")
+			}
+		}
+		isoTime := parsedTime.Format(time.RFC3339)
+		newInvoice.Time = isoTime
+	}
+
 	// get buyer address and name
 	// if paid invoice the buyer address regex is different
 	invoicePaid := strings.Contains(header, "PAID IN FULL")
@@ -271,14 +311,31 @@ func processSplitInvoice(result map[string]any) Invoice {
 	if !invoicePaid {
 		newInvoice.Status = "unpaid"
 		buyerAddressPattern = regexp.MustCompile(`\*\*\d{4}(.*?)Phone`)
+		newInvoice.InvoiceEvent = append(
+			newInvoice.InvoiceEvent,
+			InvoiceEvent{
+				Title: "Invoice Unpaid",
+				Desc:  "Invoice unpaid on issue",
+				Time:  strings.TrimSpace(timeMatch[1]),
+			},
+		)
 	} else {
 		newInvoice.Status = "paid"
 		isCard := strings.Contains(header, "Auth#")
 		if isCard {
 			newInvoice.PaymentMethod = "card"
 		}
+		newInvoice.InvoiceEvent = append(
+			newInvoice.InvoiceEvent,
+			InvoiceEvent{
+				Title: "Invoice Paid",
+				Desc:  "Invoice paid on issue",
+				Time:  strings.TrimSpace(timeMatch[1]),
+			},
+		)
 		buyerAddressPattern = regexp.MustCompile(`PAID IN FULL(.*?)Phone`)
 	}
+
 	buyerAddressPatternMatch := buyerAddressPattern.FindStringSubmatch(header)
 	if len(buyerAddressPatternMatch) > 1 {
 		nameAddress := strings.TrimSpace(buyerAddressPatternMatch[1])
@@ -293,23 +350,6 @@ func processSplitInvoice(result map[string]any) Invoice {
 		}
 	}
 
-	// get invoice time
-	timePattern := regexp.MustCompile(`\)\s*(.*?)\s*Invoice #:`)
-	timeMatch := timePattern.FindStringSubmatch(header)
-	if len(timeMatch) > 1 {
-		fmt.Println(timeMatch[1])
-		// convert time into iso format
-		var parsedTime, err = time.Parse("2006-01-02 15:04:05", strings.TrimSpace(timeMatch[1]))
-		if err != nil {
-			parsedTime, err = time.Parse("1/2/2006 3:04:05", strings.TrimSpace(timeMatch[1]))
-			if err != nil {
-				fmt.Println("cannot parse time")
-			}
-		}
-		isoTime := parsedTime.Format(time.RFC3339)
-		newInvoice.Time = isoTime
-	}
-
 	// buyer phone
 	buyerPhonePattern := regexp.MustCompile(`Phone:\s*(.*?)\s*#`)
 	buyerPhoneMatch := buyerPhonePattern.FindStringSubmatch(header)
@@ -321,8 +361,6 @@ func processSplitInvoice(result map[string]any) Invoice {
 		newInvoice.BuyerPhone = buyerPhone
 	}
 
-	// process invoice items
-	items := result["items"].([]string)
 	var itemsArr []InvoiceItem
 	for _, value := range items {
 		var invoiceItem InvoiceItem
@@ -398,37 +436,15 @@ func processSplitInvoice(result map[string]any) Invoice {
 	// set items array
 	newInvoice.Items = itemsArr
 
-	// process footer
-	footer := result["footer"].(string)
-
-	// get invoice total and remaining balance
-	invoiceBalancePattern := regexp.MustCompile(`Default:\s*(.*?)\s*Invoice Total:`)
-	invoiceBalanceMatch := invoiceBalancePattern.FindStringSubmatch(footer)
-	if len(invoiceBalanceMatch) > 1 {
-		res := strings.TrimSpace(invoiceBalanceMatch[1])
-		clean := strings.ReplaceAll(res, "$", " ")
-		parts := strings.Fields(clean)
-		total, totalErr := strconv.ParseFloat(parts[0], 32)
-		if totalErr != nil {
-			fmt.Println(totalErr.Error())
-		}
-		remaining, remainingErr := strconv.ParseFloat(parts[1], 32)
-		if remainingErr != nil {
-			fmt.Println(remainingErr.Error())
-		}
-		newInvoice.InvoiceTotal = float32(total)
-		newInvoice.RemainingBalance = float32(remaining)
-	}
-
 	// get tax
 	totalTaxPattern := regexp.MustCompile(`Quantity:\s*(.*?)\s*Tax1`)
 	totalTaxMatch := totalTaxPattern.FindStringSubmatch(footer)
 	if len(totalTaxMatch) > 1 {
-		f, err := strconv.ParseFloat(totalTaxMatch[1], 32)
-		if err != nil {
-			fmt.Println(err.Error())
+		float, parseErr := strconv.ParseFloat(totalTaxMatch[1], 32)
+		if parseErr != nil {
+			fmt.Println(parseErr.Error())
 		}
-		newInvoice.Tax = float32(f)
+		newInvoice.Tax = float
 	}
 
 	return newInvoice
@@ -783,6 +799,7 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 	}
 }
 
+// update invoice data to database
 func UpdateInvoice(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.Background()
@@ -862,6 +879,42 @@ func CreateInvoice(collection *mongo.Collection) gin.HandlerFunc {
 			}
 		}
 		c.String(200, "Invoices Uploaded")
+	}
+}
+
+type DeleteRequest struct {
+	InvoiceNumber string `json:"invoiceNumber" bson:"invoiceNumber"`
+	BuyerName     string `json:"buyerName" bson:"buyerName"`
+	Time          string `json:"time" bson:"time"`
+}
+
+// delete invoice from database
+func DeleteInvoice(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		var request DeleteRequest
+		bindErr := c.ShouldBindJSON(&request)
+		if bindErr != nil {
+			fmt.Println(bindErr.Error())
+			c.String(http.StatusBadRequest, "Invalid Body")
+			return
+		}
+
+		res, err := collection.DeleteOne(
+			ctx,
+			bson.M{
+				"invoiceNumber": request.InvoiceNumber,
+				"buyerName":     request.BuyerName,
+				"time":          request.Time,
+			},
+		)
+		if err != nil {
+			c.String(500, "Cannot Delete From Database")
+			return
+		}
+		if res != nil {
+			c.String(200, "Successfully Deleted")
+		}
 	}
 }
 
