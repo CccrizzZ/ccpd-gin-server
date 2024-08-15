@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -26,6 +27,11 @@ import (
 
 var timeFormat string = "2006-01-02T15:04:05Z07:00"
 
+func roundFloat(val float64, precision uint) float64 {
+	ratio := math.Pow(10, float64(precision))
+	return math.Round(val*ratio) / ratio
+}
+
 type Invoice struct {
 	InvoiceNumber    string         `json:"invoiceNumber" bson:"invoiceNumber" binding:"required" validate:"required"`
 	Time             string         `json:"time" bson:"time" binding:"required" validate:"required"`
@@ -44,6 +50,7 @@ type Invoice struct {
 	InvoiceEvent     []InvoiceEvent `json:"invoiceEvent" bson:"invoiceEvent"`
 	Items            []InvoiceItem  `json:"items" bson:"items"`
 	IsShipping       bool           `json:"isShipping" bson:"isShipping"`
+	BuyersPremium    float32        `json:"buyersPremium" bson:"buyersPremium"`
 }
 
 type InvoiceEvent struct {
@@ -169,6 +176,7 @@ func splitInvoice(text string) (map[string]any, error) {
 	} else {
 		return invoiceInfo, errors.New("cannot find PRICEEXTENDEDPRICE to split the header")
 	}
+	fmt.Println(text[:index[1]])
 
 	// split the items and footer
 	itemRe := regexp.MustCompile(`MSRP:(.*?)Item handling`)
@@ -206,7 +214,7 @@ func splitInvoice(text string) (map[string]any, error) {
 		after := rest[matchIndex[0]:]
 		invoiceInfo["footer"] = after
 	}
-	fmt.Println(invoiceInfo)
+	fmt.Println(rest[matchIndex[0]:])
 	return invoiceInfo, nil
 }
 
@@ -272,8 +280,15 @@ func processSplitInvoice(result map[string]any) Invoice {
 	// get invoice total and remaining balance
 	invoiceBalancePattern := regexp.MustCompile(`Default:\s*(.*?)\s*Invoice Total:`)
 	invoiceBalanceMatch := invoiceBalancePattern.FindStringSubmatch(footer)
+	invoiceBalancePattern2 := regexp.MustCompile(`Default:\s*(.*?)\s*Invoice Total:`)
+	invoiceBalanceMatch2 := invoiceBalancePattern2.FindStringSubmatch(footer)
+	var res string = ""
 	if len(invoiceBalanceMatch) > 1 {
-		res := strings.TrimSpace(invoiceBalanceMatch[1])
+		res = strings.TrimSpace(invoiceBalanceMatch[1])
+	} else if len(invoiceBalanceMatch2) > 1 {
+		res = strings.TrimSpace(invoiceBalanceMatch2[1])
+	}
+	if res != "" {
 		clean := strings.ReplaceAll(res, "$", " ")
 		parts := strings.Fields(clean)
 		total, totalErr := strconv.ParseFloat(parts[0], 32)
@@ -289,19 +304,33 @@ func processSplitInvoice(result map[string]any) Invoice {
 	}
 
 	// get invoice time
-	timePattern := regexp.MustCompile(`\)\s*(.*?)\s*Invoice #:`)
-	timeMatch := timePattern.FindStringSubmatch(header)
-	if len(timeMatch) > 1 {
-		// convert time into iso format
-		var parsedTime, err = time.Parse("2006-01-02 15:04:05", strings.TrimSpace(timeMatch[1]))
+	timePattern1 := regexp.MustCompile(`\)\s*(.*?)\s*Invoice #:`)
+	timePattern2 := regexp.MustCompile(`(\d{1,2}/\d{1,2}/\d{4} \d{1,2}:\d{2}:\d{2})`)
+	timeMatch1 := timePattern1.FindStringSubmatch(header)
+	timeMatch2 := timePattern2.FindStringSubmatch(header)
+	var timeStr string = ""
+	if len(timeMatch1) > 1 {
+		timeStr = strings.TrimSpace(timeMatch1[1])
+	} else if len(timeMatch2) > 1 {
+		timeStr = strings.TrimSpace(timeMatch2[1])
+	}
+	if timeStr != "" {
+		var parsedTime, err = time.ParseInLocation(
+			"2006-01-02 15:04:05",
+			timeStr,
+			time.Now().Location(),
+		)
 		if err != nil {
-			parsedTime, err = time.Parse("1/2/2006 3:04:05", strings.TrimSpace(timeMatch[1]))
+			parsedTime, err = time.ParseInLocation(
+				"1/2/2006 3:04:05",
+				timeStr,
+				time.Now().Location(),
+			)
 			if err != nil {
 				fmt.Println("cannot parse time")
 			}
 		}
-		isoTime := parsedTime.Format(time.RFC3339)
-		newInvoice.Time = isoTime
+		newInvoice.Time = parsedTime.String()
 	}
 
 	// get buyer address and name
@@ -316,7 +345,7 @@ func processSplitInvoice(result map[string]any) Invoice {
 			InvoiceEvent{
 				Title: "Invoice Unpaid",
 				Desc:  "Invoice unpaid on issue",
-				Time:  strings.TrimSpace(timeMatch[1]),
+				Time:  newInvoice.Time,
 			},
 		)
 	} else {
@@ -330,7 +359,7 @@ func processSplitInvoice(result map[string]any) Invoice {
 			InvoiceEvent{
 				Title: "Invoice Paid",
 				Desc:  "Invoice paid on issue",
-				Time:  strings.TrimSpace(timeMatch[1]),
+				Time:  newInvoice.Time,
 			},
 		)
 		buyerAddressPattern = regexp.MustCompile(`PAID IN FULL(.*?)Phone`)
@@ -447,212 +476,25 @@ func processSplitInvoice(result map[string]any) Invoice {
 		newInvoice.Tax = float
 	}
 
+	// get buyer premium if there is any
+	isBuyerPremium := strings.Contains(footer, "Premium:")
+	if isBuyerPremium {
+		buyersPremiumPattern := regexp.MustCompile(`(.*)Total Extended Price:`)
+		buyersPremiumMatch := buyersPremiumPattern.FindStringSubmatch(footer)
+		if len(buyersPremiumMatch) > 1 {
+			float, parseErr := strconv.ParseFloat(buyersPremiumMatch[1], 64)
+			if parseErr != nil {
+				fmt.Println(parseErr.Error())
+			}
+			fl := roundFloat(float, 2)
+			newInvoice.BuyersPremium = float32(fl)
+		}
+	} else {
+		newInvoice.BuyersPremium = 0
+	}
+
 	return newInvoice
 }
-
-// generated by chat gpt
-// parse the extracted text from pdf to object
-func parseInvoice(text string) Invoice {
-	// auction lot number
-	auctionLotPattern := regexp.MustCompile(`Auction Sale - (\d+)`)
-	auctionLotMatch := auctionLotPattern.FindStringSubmatch(text)
-	var auctionLot int
-	if len(auctionLotMatch) > 1 {
-		auctionLot, _ = strconv.Atoi(auctionLotMatch[1])
-	}
-
-	// Extract invoice number
-	invoiceNumberPattern := regexp.MustCompile(`\s+1\s+(\d+)\s*Auction Sale`)
-	invoiceNumberMatch := invoiceNumberPattern.FindStringSubmatch(text)
-	var invoiceNumber string
-	if len(invoiceNumberMatch) > 1 {
-		invoiceNumber = strings.TrimSpace(invoiceNumberMatch[1])
-	}
-
-	// Extract time
-	timePattern := regexp.MustCompile(`(\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}:\d{2})`)
-	timeMatch := timePattern.FindStringSubmatch(text)
-	var invoiceTime string
-	if len(timeMatch) > 1 {
-		invoiceTime = strings.TrimSpace(timeMatch[1])
-	}
-
-	// convert time into iso format
-	parsedTime, err := time.Parse("1/2/2006 3:04:05", invoiceTime)
-	if err != nil {
-		log.Fatal("cannot parse time")
-	}
-	isoTime := parsedTime.Format(timeFormat)
-
-	// buyer name & address
-	buyerNamePattern := regexp.MustCompile(`SOLD TO:\s*(.*?)SHIP TO:`)
-	buyerNameAddressMatch := buyerNamePattern.FindStringSubmatch(text)
-	var buyerName string
-	var buyerAddress string
-	if len(buyerNameAddressMatch) > 1 {
-		buyerInfo := strings.TrimSpace(buyerNameAddressMatch[1])
-		// the name will follow by street number
-		// split by street number
-		re := regexp.MustCompile(`\d`)
-		firstNumberIndex := re.FindStringIndex(buyerInfo)
-		if firstNumberIndex != nil {
-			buyerName = strings.TrimSpace(buyerInfo[:firstNumberIndex[0]])
-			buyerAddress = strings.TrimSpace(buyerInfo[firstNumberIndex[0]:])
-		} else {
-			// if buyer address started with letter, its not gonna detect
-			buyerName = buyerInfo
-		}
-	}
-
-	// buyer phone
-	buyerPhonePattern := regexp.MustCompile(`Phone:\s*(.*?)\s*#`)
-	buyerPhoneMatch := buyerPhonePattern.FindStringSubmatch(text)
-	var buyerPhone string
-	if len(buyerPhoneMatch) > 1 {
-		buyerPhone = strings.TrimSpace(buyerPhoneMatch[1])
-		buyerPhone = strings.ReplaceAll(buyerPhone, "-", "")
-		buyerPhone = strings.ReplaceAll(buyerPhone, " ", "")
-	}
-
-	// buyer email
-	// buyerEmailPattern := regexp.MustCompile(`SHIP TO:\s*(\S+@[^ ]+?\.com)`)
-	buyerEmailPattern := regexp.MustCompile(`SHIP TO:\s*(.*?)Lot#`)
-	buyerEmailMatch := buyerEmailPattern.FindStringSubmatch(text)
-	var buyerEmail string
-	if len(buyerEmailMatch) > 1 {
-		buyerEmail = strings.TrimSpace(buyerEmailMatch[1])
-	}
-
-	// Extract items
-	var items []InvoiceItem
-	itemPattern := regexp.MustCompile(`MSRP:\$\s*([\d.]+)\s+Y\d+\s+(\d+)T.*?Item handling fee -\s*([\d.]+)`)
-	itemMatches := itemPattern.FindAllStringSubmatch(text, -1)
-	for _, match := range itemMatches {
-		unitPrice, _ := strconv.ParseFloat(match[1], 64)
-		sku, _ := strconv.Atoi(match[2])
-		itemHandlingFee, _ := strconv.ParseFloat(match[3], 64)
-		items = append(items, InvoiceItem{
-			Sku:           sku,
-			ExtendedPrice: float32(unitPrice),
-			Desc:          "", // pull from db
-			HandlingFee:   float32(itemHandlingFee),
-		})
-	}
-
-	return Invoice{
-		AuctionLot:    auctionLot,
-		BuyerName:     buyerName,
-		Items:         items,
-		Time:          isoTime,
-		BuyerEmail:    buyerEmail,
-		BuyerAddress:  buyerAddress,
-		BuyerPhone:    buyerPhone,
-		InvoiceNumber: invoiceNumber,
-	}
-}
-
-// func parseInvoiceWithGPT(text string) (Invoice, error) {
-// 	ctx := context.Background()
-// 	var newInvoice Invoice
-// 	// pull open ai key
-// 	openAIKey := os.Getenv("OPENAI_API_KEY")
-// 	if openAIKey == "" {
-// 		return newInvoice, errors.New("cannot get chat gpt key")
-// 	}
-
-// 	// create gpt client
-// 	client := openai.NewClient(openAIKey)
-
-// 	// create prompt
-// 	prompt := "Convert the following text extracted from a PDF document into an array of objects with appropriate fields:\n\n"
-// 	prompt += text
-// 	prompt += `
-// 	export type Invoice = {
-// 		invoiceNumber: number,
-// 		buyerName: string,
-// 		buyerEmail: string,
-// 		buyerAddress: string,
-// 		paymentMethod: PaymentMethod,
-// 		auctionLot: number,
-// 		invoiceTotal: number,
-// 		buyersPremium: number,
-// 		totalHandlingFee: number,
-// 		status: InvoiceStatus,
-// 		isShipping: boolean,
-// 		time: string,
-// 		timePickedup: string,
-// 		items: InvoiceItem[],
-// 	} \n
-
-// 	export type InvoiceItem = {
-// 		sku: number
-// 		unit: number,
-// 		unitPrice: number,
-// 		extendedPrice: number,
-// 		handlingFee: number,
-// 	} \n`
-
-// 	prompt += `
-// 	when the input is: \n
-// 	"        1      16105Auction Sale - 132 - HIGH/VALUE BOXES/BULK/ELECTRONIC(132)2023-09-25 10:37:54Invoice #:Date:Page:UNPAID2023-09-25 payment declined **2601Grace RoyGrace1600-2300 Young StreetToronto, ON M4P1E4CanadaPhone:647-773-1253# 7104SOLD TO:julius_roy@msn.comLot#DESCRIPTIONQUANTITYUNIT PRICEEXTENDEDPRICE1 x 5.00        5.00Farm Innovators Model HPFLITTLE CRACKED - UNTEST - Farm Innovators Model HPF-100"All-Seasons" Heated Plastic Poultry Fountain, 3 Gallon, Red/White,100-Watt MSRP:$ 74.96 K22 1976T528Item handling fee -         1.00 T  ------------------------------------1 x 5.00        5.00Trampoline Frame Size Replacement NettingN1-1216100000 12 ft. Trampoline Frame Size Replacement NettingMSRP:$ 99.99 H12 10854T788Item handling fee -         1.00 T  ------------------------------------         10.00         1.50Total Extended Price:15% Buyer's Premium:Item handling fee:           2.00          2.00Total Quantity:        1.76Tax1  Default:        $15.26        $15.26Invoice Total:Remaining Invoice Balance:                                  FOR ALL SOLD AS IS ITEMS" \n
-// 	the output should be exactly like with only one object inside the array: \n
-// 		[{
-// 			"invoiceNumber": 16105,
-// 			"buyerName": "Grace Roy",
-// 			"buyerEmail": "julius_roy@msn.com",
-// 			"buyerAddress": "1600-2300 Young Street, Toronto, ON M4P1E4, Canada",
-// 			"shippingAddress": "",
-// 			"paymentMethod": "",
-// 			"auctionLot": 132,
-// 			"invoiceTotal": 15.26,
-// 			"buyersPremium": 1.50,
-// 			"totalHandlingFee": 2.00,
-// 			"status": "UNPAID",
-// 			"isShipping": false,
-// 			"time": "2023-09-25T10:37:54",
-// 			"timePickedup": "",
-// 			"items": [
-// 				{
-// 					"sku": 1976T528,
-// 					"unit": 1,
-// 					"unitPrice": 5.00,
-// 					"extendedPrice": 5.00,
-// 					"handlingFee": 1.00
-// 				},
-// 				{
-// 					"sku": 10854T788,
-// 					"unit": 1,
-// 					"unitPrice": 5.00,
-// 					"extendedPrice": 5.00,
-// 					"handlingFee": 1.00
-// 				}
-// 			]
-// 		}]
-// 	`
-// 	prompt += `If the input string contains "SHIP TO", there are two addresses in there, the first one is "BuyerAddress", the second one is "ShippingAddress", if not set ShippingAddress to nil ("") \n`
-// 	prompt += `the SKU will be both "1976T528" where the input is "1976T528Item handling fee" \n`
-// 	prompt += `"paymentMethod" should be empty string ("") if UNPAID mentioned in the input \n`
-// 	prompt += `the result JSON Array should ONLY have one Invoice object that contains items from all pages \n`
-
-// 	// call gpt api
-// 	res, err := client.CreateChatCompletion(
-// 		ctx,
-// 		openai.ChatCompletionRequest{
-// 			Model:       openai.GPT3Dot5Turbo,
-// 			MaxTokens:   4000,
-// 			Temperature: 0,
-// 			Messages: []openai.ChatCompletionMessage{{
-// 				Role:    openai.ChatMessageRoleUser,
-// 				Content: prompt,
-// 			}},
-// 		},
-// 	)
-// 	if err != nil {
-// 		return newInvoice, errors.New("cannot get gpt result")
-// 	}
-// 	fmt.Println(res.Choices[0].Message.Content)
-// 	return newInvoice, nil
-// }
 
 // this one only process UNPAID invoice pdf
 func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collection) gin.HandlerFunc {
@@ -681,6 +523,7 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 			"Sunday: CloseWe Asked All Items Should Check at Our Location",
 			"NO RETURN AND REFUND",
 			"#:Date:Page:UNPAIDLot#DESCRIPTIONUNIT PRICEEXTENDEDPRICE",
+			"Monday & Sunday: CloseTuesday - Saturday: 12:00pm - 6:30pmWe Asked All Items Should Check at Our Location",
 		}
 
 		var invoices []Invoice
@@ -1039,7 +882,6 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 			Value: nil,
 		}}
 		words := strings.Fields(*body.Filter.Keyword)
-		fmt.Println(words)
 		if len(words) > 0 {
 			var tempArr = bson.A{}
 			for _, val := range words {
@@ -1086,7 +928,6 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 				Value: andFilters,
 			},
 		}
-		fmt.Println(fil)
 
 		// new query options setting sort and skip
 		itemsPerPage := int64(*body.ItemsPerPage)
@@ -1136,38 +977,3 @@ func GetChartData(collection *mongo.Collection) gin.HandlerFunc {
 
 	}
 }
-
-// convert all time strings to RFC3339 format
-// func ConvertAllTimes(collection *mongo.Collection) gin.HandlerFunc {
-// 	return func(c *gin.Context) {
-// 		ctx := context.Background()
-// 		cursor, err := collection.Find(ctx, bson.M{"time": bson.M{"$exists": true}}, nil)
-// 		if err != nil {
-// 			log.Fatal("cannot find")
-// 		}
-// 		defer cursor.Close(ctx)
-// 		for cursor.Next(ctx) {
-// 			var document bson.M
-// 			err := cursor.Decode(&document)
-// 			if err != nil {
-// 				log.Fatal("cannot decode cursor")
-// 			}
-// 			parsedTime, err := time.Parse("1/2/2006, 3:04:05 PM", document["time"].(string))
-// 			if err != nil {
-// 				log.Fatal("cannot parse time")
-// 			}
-// 			newTime := parsedTime.Format(timeFormat)
-// 			fmt.Println(newTime)
-// 			updateOption := bson.M{
-// 				"$set": bson.M{
-// 					"time": newTime,
-// 				},
-// 			}
-// 			_, updateErr := collection.UpdateOne(ctx, bson.M{"_id": document["_id"]}, updateOption)
-// 			if updateErr != nil {
-// 				log.Fatal("Cannot update")
-// 			}
-// 		}
-// 		c.String(200, "Pass")
-// 	}
-// }
