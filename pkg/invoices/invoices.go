@@ -64,8 +64,9 @@ type InvoiceItem struct {
 	Msrp          float32 `json:"msrp" bson:"msrp"`
 	ShelfLocation string  `json:"shelfLocation" bson:"shelfLocation"`
 	ItemLot       int     `json:"itemLot" bson:"itemLot"`
-	Desc          string  `json:"description" bson:"description"`
+	Desc          string  `json:"desc" bson:"desc"`
 	Bid           float32 `json:"bid" bson:"bid"`
+	Unit          float32 `json:"unit" bson:"unit"`
 	ExtendedPrice float32 `json:"extendedPrice" bson:"extendedPrice"` // unit * unitPrice
 	HandlingFee   float32 `json:"handlingFee" bson:"handlingFee"`
 }
@@ -102,58 +103,49 @@ func UploadInvoice(
 	return cdnURL
 }
 
+type SoldItem struct {
+	Sku           int     `json:"sku" bson:"sku"`
+	Lot           int     `json:"clotNumber" bson:"clotNumber"`
+	Lead          string  `json:"lead" bson:"lead"`
+	ShelfLocation string  `json:"shelfLocation" bson:"shelfLocation"`
+	Bid           float64 `json:"bidAmount" bson:"bidAmount"`
+}
+
 // fill in the blank for invoice item array
 // the invoice here is a reference the passed in variable will be modified
-func FillItemDataFromDB(invoice *Invoice, client *mongo.Collection) error {
+func FillItemDataFromDB(invoice Invoice, collection *mongo.Collection) (Invoice, error) {
 	ctx := context.Background()
 
 	// loop all invoice items
+	var newItemArr []InvoiceItem
 	for _, item := range invoice.Items {
+		// construct mongo db filter
 		fil := bson.M{
-			"lot": invoice.AuctionLot,
-			"soldItems": bson.M{
-				"$elemMatch": bson.M{
-					"clotNumber": item.ItemLot,
-				},
-			},
+			"lot":                  invoice.AuctionLot,
+			"soldItems.clotNumber": item.ItemLot,
 		}
 
 		// find item in remaining record
-		var res bson.M
-		err := client.FindOne(ctx, fil, options.FindOne().SetProjection(bson.M{})).Decode(res)
+		var res struct{ SoldItems []SoldItem }
+		err := collection.FindOne(
+			ctx,
+			fil,
+			options.FindOne().SetProjection(bson.M{"soldItems.$": 1}),
+		).Decode(&res)
 		if err != nil {
-			return errors.New("cannot find invoice item in remaining record")
+			return invoice, errors.New("cannot find invoice item in remaining record")
 		}
 
-		// get lead
-		if lead, ok := res["lead"].(string); ok {
-			if item.Desc == "" {
-				item.Desc = lead
-			}
-		} else {
-			return errors.New("cannot get lead")
-		}
-
-		// get bid
-		if bid, ok := res["bidAmount"].(float32); ok {
-			if item.Bid == 0 {
-				item.Bid = float32(bid)
-			}
-		} else {
-			return errors.New("cannot get bid")
-		}
-
-		// shelf location
-		if shelfLocation, ok := res["shelfLocation"].(string); ok {
-			if item.ShelfLocation == "" {
-				item.ShelfLocation = shelfLocation
-			}
-		} else {
-			return errors.New("cannot get shelf location")
-		}
+		// unpack and set datas
+		inv := res.SoldItems[0]
+		item.Desc = inv.Lead
+		item.Bid = float32(inv.Bid)
+		item.ShelfLocation = inv.ShelfLocation
+		item.Sku = inv.Sku
+		newItemArr = append(newItemArr, item)
 	}
-
-	return nil
+	invoice.Items = newItemArr
+	return invoice, nil
 }
 
 // split the invoice text into parts
@@ -176,7 +168,6 @@ func splitInvoice(text string) (map[string]any, error) {
 	} else {
 		return invoiceInfo, errors.New("cannot find PRICEEXTENDEDPRICE to split the header")
 	}
-	fmt.Println(text[:index[1]])
 
 	// split the items and footer
 	itemRe := regexp.MustCompile(`MSRP:(.*?)Item handling`)
@@ -189,6 +180,7 @@ func splitInvoice(text string) (map[string]any, error) {
 			invoiceItems = append(invoiceItems, strings.TrimSpace(match[1]))
 		}
 	}
+	invoiceInfo["items"] = invoiceItems
 
 	// get handling fee for all items
 	handlingFeePattern := regexp.MustCompile(`Item handling fee\s*-\s*(.*?)\s*T`)
@@ -199,22 +191,32 @@ func splitInvoice(text string) (map[string]any, error) {
 			handlingFees = append(handlingFees, strings.TrimSpace(match[1]))
 		}
 	}
-
-	// add invoice items array
-	invoiceInfo["items"] = invoiceItems
 	invoiceInfo["itemHandlingFees"] = handlingFees
+
+	// get unit for all items
+	unitPattern := regexp.MustCompile(`(\d+)\s*x\s*\d+\.\d{2}`)
+	unitMatches := unitPattern.FindAllStringSubmatch(rest, -1)
+	var unit []float32
+	for _, match := range unitMatches {
+		f, err := strconv.ParseFloat(strings.TrimSpace(match[1]), 32)
+		if err != nil {
+			fmt.Println(err.Error())
+		}
+		unit = append(unit, float32(f))
+	}
+	invoiceInfo["unitsArr"] = unit
+	fmt.Println(unit)
 
 	// get footer
 	pattern := `\d+\.\d{2}\s*Total Extended Price:`
 	footerRe := regexp.MustCompile(pattern)
-
-	// get match index
 	matchIndex := footerRe.FindStringIndex(rest)
 	if matchIndex != nil {
 		after := rest[matchIndex[0]:]
 		invoiceInfo["footer"] = after
 	}
-	fmt.Println(rest[matchIndex[0]:])
+
+	fmt.Println(text)
 	return invoiceInfo, nil
 }
 
@@ -280,24 +282,53 @@ func processSplitInvoice(result map[string]any) Invoice {
 	// get invoice total and remaining balance
 	invoiceBalancePattern := regexp.MustCompile(`Default:\s*(.*?)\s*Invoice Total:`)
 	invoiceBalanceMatch := invoiceBalancePattern.FindStringSubmatch(footer)
-	invoiceBalancePattern2 := regexp.MustCompile(`Default:\s*(.*?)\s*Invoice Total:`)
-	invoiceBalanceMatch2 := invoiceBalancePattern2.FindStringSubmatch(footer)
-	var res string = ""
+	// flag to check if match is float
+	var isFloat bool = true
 	if len(invoiceBalanceMatch) > 1 {
-		res = strings.TrimSpace(invoiceBalanceMatch[1])
-	} else if len(invoiceBalanceMatch2) > 1 {
-		res = strings.TrimSpace(invoiceBalanceMatch2[1])
-	}
-	if res != "" {
+		res := strings.TrimSpace(invoiceBalanceMatch[1])
+		// repace $ with space
 		clean := strings.ReplaceAll(res, "$", " ")
+
+		// split into array
 		parts := strings.Fields(clean)
+
+		// parse float
 		total, totalErr := strconv.ParseFloat(parts[0], 32)
 		if totalErr != nil {
-			fmt.Println(totalErr.Error())
+			isFloat = false
+			fmt.Println(totalErr)
 		}
 		remaining, remainingErr := strconv.ParseFloat(parts[1], 32)
 		if remainingErr != nil {
-			fmt.Println(remainingErr.Error())
+			isFloat = false
+			fmt.Println(remainingErr)
+		}
+
+		// if they are float set them to invoice
+		if isFloat {
+			newInvoice.InvoiceTotal = float32(total)
+			newInvoice.RemainingBalance = float32(remaining)
+		}
+	}
+
+	if len(invoiceBalanceMatch) < 1 || !isFloat {
+		invoiceBalancePattern2 := regexp.MustCompile(`PAID IN FULL\s*(.*?)\s*Invoice Total:`)
+		invoiceBalanceMatch2 := invoiceBalancePattern2.FindStringSubmatch(footer)
+		match := strings.TrimSpace(invoiceBalanceMatch2[1])
+		// repace $ with space
+		clean := strings.ReplaceAll(match, "$", " ")
+
+		// split into array
+		parts := strings.Fields(clean)
+
+		// parse float
+		total, totalErr := strconv.ParseFloat(parts[0], 32)
+		if totalErr != nil {
+			fmt.Println(totalErr)
+		}
+		remaining, remainingErr := strconv.ParseFloat(parts[1], 32)
+		if remainingErr != nil {
+			fmt.Println(remainingErr)
 		}
 		newInvoice.InvoiceTotal = float32(total)
 		newInvoice.RemainingBalance = float32(remaining)
@@ -350,10 +381,7 @@ func processSplitInvoice(result map[string]any) Invoice {
 		)
 	} else {
 		newInvoice.Status = "paid"
-		isCard := strings.Contains(header, "Auth#")
-		if isCard {
-			newInvoice.PaymentMethod = "card"
-		}
+		newInvoice.PaymentMethod = "card"
 		newInvoice.InvoiceEvent = append(
 			newInvoice.InvoiceEvent,
 			InvoiceEvent{
@@ -390,8 +418,9 @@ func processSplitInvoice(result map[string]any) Invoice {
 		newInvoice.BuyerPhone = buyerPhone
 	}
 
+	unitsArr := result["unitsArr"].([]float32)
 	var itemsArr []InvoiceItem
-	for _, value := range items {
+	for index, value := range items {
 		var invoiceItem InvoiceItem
 
 		// get rid of dollar sign and T
@@ -400,6 +429,9 @@ func processSplitInvoice(result map[string]any) Invoice {
 		item = strings.TrimSpace(item)
 		// split into string array by space
 		datas := strings.Fields(item)
+
+		// set unit amount by units array
+		invoiceItem.Unit = float32(unitsArr[index])
 
 		// if check for error case
 		// example error case $ 10.98Y17 43430T651 => 10.98Y17 43430 651 (len<4)
@@ -497,7 +529,7 @@ func processSplitInvoice(result map[string]any) Invoice {
 }
 
 // this one only process UNPAID invoice pdf
-func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collection) gin.HandlerFunc {
+func CreateInvoiceFromPDF(storageClient *minio.Client, collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.Background()
 		// get files from form
@@ -556,7 +588,7 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 					// check if bucket exist
 					exists, existErr := storageClient.BucketExists(ctx, "Invoices")
 					if existErr != nil || !exists {
-						c.String(http.StatusInternalServerError, "Bucket Not Exist")
+						c.String(http.StatusInternalServerError, "No Such Bucket")
 						return
 					}
 					cdnLink := UploadInvoice(ctx, storageClient, file, fileHeader)
@@ -627,10 +659,12 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, mongoClient *mongo.Collec
 
 				// split and extract data with regex
 				invoice := processSplitInvoice(re)
-				fillErr := FillItemDataFromDB(&invoice, mongoClient)
-				if fillErr != nil {
-					fmt.Println(fillErr)
+				fixedInvoice, err1 := FillItemDataFromDB(invoice, collection)
+				if err1 != nil {
+					fmt.Println(err1)
 				}
+				invoice = fixedInvoice
+				fmt.Println(invoice)
 				invoices = append(invoices, invoice)
 			}
 		}
