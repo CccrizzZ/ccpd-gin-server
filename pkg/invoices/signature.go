@@ -1,31 +1,75 @@
 package invoices
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 
-	socketio "github.com/googollee/go-socket.io"
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
-// on client connection
-func OnConnect(s socketio.Conn) error {
-	s.SetContext("")
-	fmt.Println("Connected: ")
-	fmt.Println(s.ID())
-	return nil
+type Message struct {
+	Type string      `json:"type"`
+	Data interface{} `json:"data"`
 }
 
-// on init signature from client
-func InitSignature(s socketio.Conn, msg string) {
-	fmt.Println("Notice:", msg)
-	s.Emit("reply", "have "+msg)
+// types of message emitted by client
+const (
+	InitSignature   string = "initSignature"
+	SubmitSignature string = "submitSignature"
+)
+
+// server object
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
 }
 
-// on client disconnected from socket
-func OnDisconnect(s socketio.Conn, reason string) {
-	fmt.Println("Connection Closed:", reason)
+// gorilla websocket
+func WsHandler(c *gin.Context) {
+	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		fmt.Println("upgrade:", err)
+		return
+	}
+	defer ws.Close()
+
+	for {
+		// read bytes from client
+		_, msg, err := ws.ReadMessage()
+		if err != nil {
+			fmt.Println("Read Msg Error:", err)
+			break
+		}
+		fmt.Printf("Got Msg: %s\n", msg)
+
+		// unmarshal into msg type
+		var inMsg Message
+		jsonErr := json.Unmarshal(msg, &inMsg)
+		if jsonErr != nil {
+			fmt.Println("Cannot Unmarshal JSON")
+		}
+
+		// switch on message type
+		switch inMsg.Type {
+		case InitSignature:
+			OnInitSignature(ws, inMsg.Data)
+		case SubmitSignature:
+			OnSubmitSignature(ws, inMsg.Data)
+		}
+	}
 }
 
-// on socket error
-func OnError(s socketio.Conn, e error) {
-	fmt.Println("Socket Error:", e)
+// data should contain invoice number, date, buyer name
+func OnInitSignature(ws *websocket.Conn, data interface{}) {
+	fmt.Println(data)
+	fmt.Println("INIT SIG")
+}
+
+// submit the signature record
+func OnSubmitSignature(ws *websocket.Conn, data interface{}) {
+	fmt.Println(data)
+	fmt.Println("SUBMIT SIG")
 }

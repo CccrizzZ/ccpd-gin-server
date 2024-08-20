@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"os"
 	"time"
 
@@ -17,43 +16,20 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	socketio "github.com/googollee/go-socket.io"
-	"github.com/googollee/go-socket.io/engineio"
-	"github.com/googollee/go-socket.io/engineio/transport"
-	"github.com/googollee/go-socket.io/engineio/transport/polling"
-	"github.com/googollee/go-socket.io/engineio/transport/websocket"
 	"github.com/joho/godotenv"
 	middleware "github.com/s12i/gin-throttle"
 )
 
 // IP whitelist
-// var IPList = map[string]bool{
-// 	"127.0.0.1":      true,
-// 	"142.114.216.52": true,
-// }
-
-var allowOriginFunc = func(r *http.Request) bool {
-	return true
-}
+//
+//	var IPList = map[string]bool{
+//		"127.0.0.1":      true,
+//		"142.114.216.52": true,
+//	}
 
 func main() {
 	// load dotenv
 	godotenv.Load()
-
-	// construct socket io server
-	server := socketio.NewServer(&engineio.Options{
-		Transports: []transport.Transport{
-			&polling.Transport{
-				CheckOrigin: allowOriginFunc,
-			},
-			&websocket.Transport{
-				CheckOrigin: allowOriginFunc,
-			},
-		},
-	})
-	server.OnConnect("/", invoices.OnConnect)
-	server.OnEvent("/", "initSignature", invoices.InitSignature)
-	server.OnDisconnect("/", invoices.OnDisconnect)
 
 	// mongodb collections
 	mongoClient := mongo.InitMongo()
@@ -118,8 +94,10 @@ func main() {
 	// use fb auth on all route
 	// r.Use(auth.FirebaseAuthMiddleware(firebaseAuthClient))
 
-	// socket
-	r.GET("/socket.io/", gin.WrapH(server))
+	// gorilla web socket
+	r.GET("/ws", invoices.WsHandler)
+	// go invoices.HandleBroadcasts()
+
 	// contact form controller
 	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
 	r.POST("/submitImages", azure.SubmitImages(azureClient))
