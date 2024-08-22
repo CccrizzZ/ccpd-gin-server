@@ -125,5 +125,4 @@ func OnSubmitSignature(ws *websocket.Conn, msg Message) {
 	}
 	// broadcast
 	bcast(msgBytes)
-
 }

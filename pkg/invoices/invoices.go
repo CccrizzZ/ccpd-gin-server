@@ -76,13 +76,14 @@ type InvoiceItem struct {
 func UploadInvoice(
 	ctx context.Context,
 	storageClient *minio.Client,
+	bucket string,
 	file multipart.File,
 	header *multipart.FileHeader,
 ) string {
 	// upload pdf file to space object storage
 	uploaded, uploadErr := storageClient.PutObject(
 		ctx,
-		"Invoices",
+		bucket,
 		header.Filename,
 		file,
 		header.Size,
@@ -591,7 +592,7 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, collection *mongo.Collect
 						c.String(http.StatusInternalServerError, "No Such Bucket")
 						return
 					}
-					cdnLink := UploadInvoice(ctx, storageClient, file, fileHeader)
+					cdnLink := UploadInvoice(ctx, storageClient, "Invoices", file, fileHeader)
 					fmt.Println(cdnLink)
 				}
 
@@ -792,6 +793,88 @@ func DeleteInvoice(collection *mongo.Collection) gin.HandlerFunc {
 		if res != nil {
 			c.String(200, "Successfully Deleted")
 		}
+	}
+}
+
+func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		// get files from form
+		form, err := c.MultipartForm()
+		if err != nil {
+			fmt.Println("Cannot Open File:", err)
+			c.String(http.StatusBadRequest, "Invalid Body")
+			return
+		}
+		invoiceNumber := form.Value["invoiceNumber"]
+		files := form.File["signature"]
+
+		// loop through all files
+		var cdnLink string
+		for _, image := range files {
+			fh, err := image.Open()
+			if err != nil {
+				fmt.Println("Cannot Open File:", err)
+				c.String(http.StatusBadRequest, "Invalid Body")
+				fh.Close()
+				return
+			}
+			image.Filename = invoiceNumber[0] + "_sig"
+
+			// check if bucket exist in object storage
+			exists, existErr := storageClient.BucketExists(ctx, "Signatures")
+			if existErr != nil || !exists {
+				c.String(http.StatusInternalServerError, "No Such Bucket")
+				return
+			}
+
+			// upload to digital ocean
+			cdnLink = UploadInvoice(ctx, storageClient, "Signatures", fh, image)
+
+			// objCh := storageClient.ListObjects(
+			// 	ctx,
+			// 	"Signatures",
+			// 	minio.ListObjectsOptions{
+			// 		Recursive: true,
+			// 	},
+			// )
+
+			// for obj := range objCh {
+			// 	if obj.Err != nil {
+			// 		fmt.Println(obj.Err)
+			// 	}
+			// 	fmt.Println("Object: ", obj.Key)
+			// }
+		}
+
+		// add signature event to invoice event
+		now := time.Now()
+		layout := "2006-01-02 15:04:05 -0700 MST"
+		formattedTime := now.Format(layout)
+		newEvent := InvoiceEvent{
+			Title: "Pickup Signature",
+			Desc:  "Customer signed and picked up",
+			Time:  formattedTime,
+		}
+
+		// update information to invoice document
+		collection.UpdateOne(
+			ctx,
+			bson.M{
+				"invoiceNumber": invoiceNumber[0],
+			},
+			bson.M{
+				"$push": bson.M{
+					"invoiceEvent": newEvent,
+				},
+				"$set": bson.M{
+					"status":       "pickedup",
+					"signatureCdn": cdnLink,
+				},
+			},
+		)
+
+		c.String(200, cdnLink)
 	}
 }
 

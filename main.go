@@ -118,6 +118,7 @@ func main() {
 	r.POST("/updateInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.UpdateInvoice(invoicesCollection))
 	r.POST("/createInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoice(invoicesCollection))
 	r.DELETE("/deleteInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.DeleteInvoice(invoicesCollection))
+	r.POST("/uploadSignature", invoices.UploadSignature(spaceObjectStorageClient, invoicesCollection))
 	// r.POST("/convertAllTimes", invoices.ConvertAllTimes(invoicesCollection))
 
 	r.Run(":3000")
