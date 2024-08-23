@@ -55,8 +55,8 @@ func main() {
 	r := gin.Default()
 
 	// throttle middleware
-	maxEventsPerSec := 10
-	maxBurstSize := 5
+	maxEventsPerSec := 15
+	maxBurstSize := 10
 	r.Use(middleware.Throttle(maxEventsPerSec, maxBurstSize))
 
 	// ip whitelist middleware
@@ -119,6 +119,8 @@ func main() {
 	r.POST("/createInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoice(invoicesCollection))
 	r.DELETE("/deleteInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.DeleteInvoice(invoicesCollection))
 	r.POST("/uploadSignature", invoices.UploadSignature(spaceObjectStorageClient, invoicesCollection))
+	r.GET("/getAllInvoiceLot", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetAllInvoiceLot(invoicesCollection))
+	r.GET("/getChartData", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetChartData(invoicesCollection))
 	// r.POST("/convertAllTimes", invoices.ConvertAllTimes(invoicesCollection))
 
 	r.Run(":3000")

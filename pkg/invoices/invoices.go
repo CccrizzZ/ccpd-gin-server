@@ -26,6 +26,7 @@ import (
 )
 
 var timeFormat string = "2006-01-02T15:04:05Z07:00"
+var invoiceTimeFormat = "2006-01-02 15:04:05 -0700 MST"
 
 func roundFloat(val float64, precision uint) float64 {
 	ratio := math.Pow(10, float64(precision))
@@ -849,8 +850,7 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 
 		// add signature event to invoice event
 		now := time.Now()
-		layout := "2006-01-02 15:04:05 -0700 MST"
-		formattedTime := now.Format(layout)
+		formattedTime := now.Format(invoiceTimeFormat)
 		newEvent := InvoiceEvent{
 			Title: "Pickup Signature",
 			Desc:  "Customer signed and picked up",
@@ -893,6 +893,7 @@ type InvoiceFilter struct {
 	InvoiceTotalRange Range    `json:"invoiceTotalRange" binding:"required"`
 	Keyword           *string  `json:"keyword" binding:"required"`
 	InvoiceNumber     string   `json:"invoiceNumber"`
+	AuctionLot        string   `json:"auctionLot"`
 }
 
 type GetInvoiceRequest struct {
@@ -1016,10 +1017,22 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 			invoiceNumberFilter["invoiceNumber"] = body.Filter.InvoiceNumber
 		}
 
+		// auction lot
+		auctionLotFilter := bson.M{}
+		if body.Filter.AuctionLot != "" {
+			intLot, err := strconv.ParseInt(body.Filter.AuctionLot, 0, 32)
+			if err != nil {
+				c.String(500, "Cannot Parse Auction Lot")
+				return
+			}
+			auctionLotFilter["auctionLot"] = intLot
+		}
+
 		// make mongodb query filter
 		andFilters := bson.A{
 			shippingFilter,
 			invoiceNumberFilter,
+			auctionLotFilter,
 		}
 		// if payment method passed in, append payment method filter
 		if paymentMethodFilter[0].Value != nil {
@@ -1088,9 +1101,146 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 	}
 }
 
+type BarChartData struct {
+	Month     string
+	Cash      int32
+	Card      int32
+	Etransfer int32
+}
+
+type LineChartData struct {
+	Lot    int32
+	Amount float32
+}
+
+// convert numeric month to string
+func numberToMonth(number int64) string {
+	switch number {
+	case 1:
+		return "January"
+	case 2:
+		return "February"
+	case 3:
+		return "March"
+	case 4:
+		return "April"
+	case 5:
+		return "May"
+	case 6:
+		return "June"
+	case 7:
+		return "July"
+	case 8:
+		return "August"
+	case 9:
+		return "September"
+	case 10:
+		return "October"
+	case 11:
+		return "November"
+	case 12:
+		return "December"
+	default:
+		return ""
+	}
+}
+
 // datas for invoice controller charts
 func GetChartData(collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx := context.Background()
+		// format
+		// const data = [
+		// 	{ month: 'January', Cash: 1200, Card: 900, "E-transfer": 200 },
+		// 	{ month: 'February', Cash: 1900, Card: 1200, "E-transfer": 400 },
+		// 	{ month: 'March', Cash: 400, Card: 1000, "E-transfer": 200 },
+		// 	{ month: 'April', Cash: 1000, Card: 200, "E-transfer": 800 },
+		// 	{ month: 'May', Cash: 800, Card: 1400, "E-transfer": 1200 },
+		// 	{ month: 'June', Cash: 750, Card: 600, "E-transfer": 1000 },
+		//   ]
 
+		// get 6 month before
+		now := time.Now()
+		start := now.AddDate(0, -6, 0)
+		// start.Month()
+
+		// find all document where payment method not null
+		fil := bson.M{
+			"time": bson.M{
+				"$gte": start.Format(time.RFC3339),
+			},
+			"paymentMethod": bson.M{
+				"$ne": nil,
+			},
+		}
+
+		// chart datas
+		// barChartData := []BarChartData{}
+		// lineChartData := []LineChartData{}
+
+		// find all
+		curs, err := collection.Find(ctx, fil, nil)
+		if err != nil {
+			fmt.Print(err.Error())
+			c.String(500, "Cannot Find Records")
+			return
+		}
+		defer curs.Close(ctx)
+
+		var cashData map[string]float32 = map[string]float32{}
+		var cardData map[string]float32 = map[string]float32{}
+		var etransferData map[string]float32 = map[string]float32{}
+
+		// loop cursor
+		for curs.Next(ctx) {
+			var result Invoice
+			err := curs.Decode(&result)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			// determine invoice month
+			t, err := time.Parse(invoiceTimeFormat, result.Time)
+			if err != nil {
+				fmt.Println("Error parsing date:", err)
+				return
+			}
+
+			// convert month to string
+			month := numberToMonth(int64(t.Month()))
+			fmt.Println(month)
+
+			// add invoice total to totals
+			switch result.PaymentMethod {
+			case "cash":
+				cashData[month] += result.InvoiceTotal
+			case "card":
+				cardData[month] += result.InvoiceTotal
+			case "etransfer":
+				etransferData[month] += result.InvoiceTotal
+			}
+
+			// barData[month] += int64(result.InvoiceTotal)
+		}
+		fmt.Println(cashData)
+		fmt.Println(cardData)
+		fmt.Println(etransferData)
+	}
+}
+
+func GetAllInvoiceLot(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		res, err := collection.Distinct(
+			context.Background(),
+			"auctionLot",
+			bson.M{},
+			nil,
+		)
+		if err != nil {
+			fmt.Println(err.Error())
+			c.String(500, "Cannot Get Distinct")
+			return
+		}
+		c.JSON(200, res)
 	}
 }
