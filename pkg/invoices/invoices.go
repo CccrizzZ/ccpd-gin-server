@@ -10,7 +10,9 @@ import (
 	"math"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -691,8 +693,6 @@ func UpdateInvoice(collection *mongo.Collection) gin.HandlerFunc {
 			c.String(http.StatusBadRequest, "Invalid Body")
 			return
 		}
-		fmt.Println("newInvoice:")
-		fmt.Println(newInvoice)
 
 		// in, err := strconv.ParseInt(newInvoice.InvoiceNumber, 0, 32)
 		// if err != nil {
@@ -875,6 +875,65 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		)
 
 		c.String(200, cdnLink)
+	}
+}
+
+type DeleteSignatureReq struct {
+	InvoiceNumber string `json:"invoiceNumber" bson:"invoiceNumber"`
+	BuyerName     string `json:"buyerName" bson:"buyerName"`
+	CDNLink       string `json:"cdnLink" bson:"cdnLink"`
+}
+
+func DeleteSignature(storageClient *minio.Client, collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		var request DeleteSignatureReq
+		bindErr := c.ShouldBindJSON(&request)
+		if bindErr != nil {
+			fmt.Println(bindErr.Error())
+			c.String(http.StatusBadRequest, "Invalid Body")
+			return
+		}
+
+		// Parse the URL
+		parsedURL, err := url.Parse(request.CDNLink)
+		if err != nil {
+			fmt.Println("Error parsing URL:", err)
+			return
+		}
+		urlPath := parsedURL.Path
+		fileName := path.Base(urlPath)
+
+		// remove from object storage
+		deleteErr := storageClient.RemoveObject(ctx, "Signatures", fileName, minio.RemoveObjectOptions{})
+		if deleteErr != nil {
+			fmt.Println(deleteErr.Error())
+			return
+		}
+
+		// delete cdn link from invoice
+		collection.UpdateOne(
+			ctx,
+			bson.M{
+				"invoiceNumber": request.InvoiceNumber,
+				"buyerName":     request.BuyerName,
+			},
+			bson.M{
+				"$set": bson.M{
+					"signatureCdn": nil,
+				},
+			},
+			nil,
+		)
+
+	}
+}
+
+// confirms the signature and deduct paid amount
+func ConfirmSignature(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// ctx := context.Background()
+
 	}
 }
 
@@ -1101,11 +1160,47 @@ func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
 	}
 }
 
+type InvoiceNumberRequest struct {
+	InvoiceNumber string `json:"invoiceNumber"`
+}
+
+func GetInvoiceByInvoiceNumber(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		var request InvoiceNumberRequest
+		bindErr := c.ShouldBindJSON(&request)
+		if bindErr != nil {
+			fmt.Println(bindErr.Error())
+			c.String(http.StatusBadRequest, "Invalid Body")
+			return
+		}
+
+		// use find one to get target invoice
+		opt := options.FindOne().SetProjection(
+			bson.D{
+				{Key: "_id", Value: 0},
+			},
+		)
+		var inv Invoice
+		res := collection.FindOne(
+			ctx,
+			bson.M{
+				"invoiceNumber": request.InvoiceNumber,
+			},
+			opt,
+		).Decode(&inv)
+
+		if res != nil {
+			c.JSON(200, inv)
+		}
+	}
+}
+
 type BarChartData struct {
 	Month     string
-	Cash      int32
-	Card      int32
-	Etransfer int32
+	Cash      float32
+	Card      float32
+	Etransfer float32
 }
 
 type LineChartData struct {
@@ -1191,6 +1286,9 @@ func GetChartData(collection *mongo.Collection) gin.HandlerFunc {
 		var cardData map[string]float32 = map[string]float32{}
 		var etransferData map[string]float32 = map[string]float32{}
 
+		// key: auction lot, val: auction total
+		var auctionLotTotal map[int32]float32 = map[int32]float32{}
+
 		// loop cursor
 		for curs.Next(ctx) {
 			var result Invoice
@@ -1220,11 +1318,64 @@ func GetChartData(collection *mongo.Collection) gin.HandlerFunc {
 				etransferData[month] += result.InvoiceTotal
 			}
 
-			// barData[month] += int64(result.InvoiceTotal)
+			auctionLotTotal[int32(result.AuctionLot)] += result.InvoiceTotal
 		}
-		fmt.Println(cashData)
-		fmt.Println(cardData)
-		fmt.Println(etransferData)
+
+		var barData []BarChartData
+		for month, total := range cashData {
+			found := false
+			for _, val := range barData {
+				if val.Month == month {
+					ref := &val
+					ref.Cash += total
+					found = true
+				}
+			}
+			if !found {
+				barData = append(barData, BarChartData{
+					Cash:  total,
+					Month: month,
+				})
+			}
+		}
+
+		for month, total := range cardData {
+			found := false
+			for _, val := range barData {
+				if val.Month == month {
+					ref := &val
+					ref.Card += total
+					found = true
+				}
+			}
+			if !found {
+				barData = append(barData, BarChartData{
+					Card:  total,
+					Month: month,
+				})
+			}
+		}
+
+		for month, total := range etransferData {
+			found := false
+			for _, val := range barData {
+				if val.Month == month {
+					ref := &val
+					ref.Etransfer += total
+					found = true
+				}
+			}
+			if !found {
+				barData = append(barData, BarChartData{
+					Etransfer: total,
+					Month:     month,
+				})
+			}
+		}
+
+		fmt.Println(auctionLotTotal)
+		fmt.Println(barData)
+		c.JSON(200, barData)
 	}
 }
 

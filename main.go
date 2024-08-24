@@ -114,6 +114,7 @@ func main() {
 
 	// invoices controller
 	r.POST("/getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))
+	r.POST("/getInvoicesByInvoiceNumber", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoiceByInvoiceNumber(invoicesCollection))
 	r.POST("/createInvoiceFromPdf", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoiceFromPDF(spaceObjectStorageClient, remainingCollection))
 	r.POST("/updateInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.UpdateInvoice(invoicesCollection))
 	r.POST("/createInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoice(invoicesCollection))
@@ -121,6 +122,8 @@ func main() {
 	r.POST("/uploadSignature", invoices.UploadSignature(spaceObjectStorageClient, invoicesCollection))
 	r.GET("/getAllInvoiceLot", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetAllInvoiceLot(invoicesCollection))
 	r.GET("/getChartData", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetChartData(invoicesCollection))
+	r.POST("/confirmSignature", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.ConfirmSignature(invoicesCollection))
+	r.DELETE("/deleteSignature", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.DeleteSignature(spaceObjectStorageClient, invoicesCollection))
 	// r.POST("/convertAllTimes", invoices.ConvertAllTimes(invoicesCollection))
 
 	r.Run(":3000")
