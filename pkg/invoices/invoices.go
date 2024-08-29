@@ -54,6 +54,8 @@ type Invoice struct {
 	Items            []InvoiceItem  `json:"items" bson:"items"`
 	IsShipping       bool           `json:"isShipping" bson:"isShipping"`
 	BuyersPremium    float32        `json:"buyersPremium" bson:"buyersPremium"`
+	SignatureCdn     string         `json:"signatureCdn" bson:"signatureCdn"`
+	InvoiceCdn       string         `json:"invoiceCdn" bson:"invoiceCdn"`
 }
 
 type InvoiceEvent struct {
@@ -587,6 +589,7 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, collection *mongo.Collect
 					return
 				}
 
+				var cdnLink string = ""
 				// upload invoice to space object storage if uploadPDF in form is true
 				if toUpload {
 					// check if bucket exist
@@ -595,12 +598,11 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, collection *mongo.Collect
 						c.String(http.StatusInternalServerError, "No Such Bucket")
 						return
 					}
-					cdnLink := UploadInvoice(ctx, storageClient, "Invoices", file, fileHeader)
-					fmt.Println(cdnLink)
+					cdnLink = UploadInvoice(ctx, storageClient, "Invoices", file, fileHeader)
 				}
 
 				// create temp file from buffer
-				tmp, createErr := os.CreateTemp("./", "*.pdf")
+				tmp, createErr := os.CreateTemp("./pdf", "*.pdf")
 				if createErr != nil {
 					c.String(http.StatusInternalServerError, "Error Creating Temp File: %v", createErr.Error())
 					return
@@ -663,13 +665,13 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, collection *mongo.Collect
 
 				// split and extract data with regex
 				invoice := processSplitInvoice(re)
+				// fill the inventories with data from database
 				fixedInvoice, err1 := FillItemDataFromDB(invoice, collection)
 				if err1 != nil {
 					fmt.Println(err1)
 				}
-				invoice = fixedInvoice
-				fmt.Println(invoice)
-				invoices = append(invoices, invoice)
+				fixedInvoice.InvoiceCdn = cdnLink
+				invoices = append(invoices, fixedInvoice)
 			}
 		}
 
@@ -831,21 +833,6 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 
 			// upload to digital ocean
 			cdnLink = UploadInvoice(ctx, storageClient, "Signatures", fh, image)
-
-			// objCh := storageClient.ListObjects(
-			// 	ctx,
-			// 	"Signatures",
-			// 	minio.ListObjectsOptions{
-			// 		Recursive: true,
-			// 	},
-			// )
-
-			// for obj := range objCh {
-			// 	if obj.Err != nil {
-			// 		fmt.Println(obj.Err)
-			// 	}
-			// 	fmt.Println("Object: ", obj.Key)
-			// }
 		}
 
 		// add signature event to invoice event
@@ -1393,5 +1380,52 @@ func GetAllInvoiceLot(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 		c.JSON(200, res)
+	}
+}
+
+type VerifyReq = struct {
+	InvoiceNumber string `json:"invoiceNumber" bson:"invoiceNumber"`
+}
+
+type VerifyRes = struct {
+	InvoiceNumber string `json:"invoiceNumber" bson:"invoiceNumber"`
+	BuyerName     string `json:"buyerName" bson:"buyerName"`
+}
+
+func VerifyInvoiceNumber(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req VerifyReq
+		err := c.ShouldBindJSON(&req)
+		if err != nil {
+			fmt.Println(err.Error())
+			c.String(400, "Invalid Body")
+			return
+		}
+
+		// pull from database
+		var responseData VerifyRes
+		if req.InvoiceNumber != "" {
+			err := collection.FindOne(
+				context.Background(),
+				bson.M{"invoiceNumber": req.InvoiceNumber},
+				options.FindOne().SetProjection(bson.M{"buyerName": 1, "invoiceNumber": 1}),
+			).Decode(&responseData)
+			if err != nil {
+				c.String(500, "Cannot Decode Record")
+				return
+			}
+		} else {
+			c.String(400, "Invalid Body")
+			return
+		}
+
+		// if no results return 404
+		if responseData.BuyerName == "" || responseData.InvoiceNumber == "" {
+			c.String(404, "Invoice Incomplete")
+			return
+		}
+
+		fmt.Println(responseData)
+		c.JSON(200, responseData)
 	}
 }
