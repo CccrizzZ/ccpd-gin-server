@@ -59,8 +59,8 @@ type Invoice struct {
 }
 
 type InvoiceEvent struct {
-	Desc  string `json:"desc" bson:"desc"`
 	Title string `json:"title" bson:"title"`
+	Desc  string `json:"desc" bson:"desc"`
 	Time  string `json:"time" bson:"time"`
 }
 
@@ -1427,5 +1427,62 @@ func VerifyInvoiceNumber(collection *mongo.Collection) gin.HandlerFunc {
 
 		fmt.Println(responseData)
 		c.JSON(200, responseData)
+	}
+}
+
+type RefundReq = struct {
+	InvoiceNumber string        `json:"invoiceNumber" bson:"invoiceNumber"`
+	RefundItems   []InvoiceItem `json:"refundItems" bson:"refundItems"`
+}
+
+// takes invoice number and refund item array, add refund invoice event, then
+func RefundInvoice(collection *mongo.Collection) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req RefundReq
+		err := c.ShouldBindJSON(&req)
+		if err != nil {
+			c.String(400, "Invalid Body")
+		}
+		fmt.Println(req)
+
+		var refundSum float32 = 0
+		for _, item := range req.RefundItems {
+			refundSum += float32(item.Bid)
+			refundSum += float32(item.HandlingFee)
+		}
+
+		fmt.Println(len(req.RefundItems))
+		fmt.Println(refundSum)
+
+		desc := fmt.Sprintf("Refund: %d Items, Total: %f", len(req.RefundItems), refundSum)
+
+		// construct invoice event
+		currentTime := time.Now()
+		var newRefundEvent = InvoiceEvent{
+			Title: "Refund",
+			Desc:  desc,
+			Time:  currentTime.Format(time.RFC3339),
+		}
+		fmt.Println(newRefundEvent)
+
+		// create new field called refundArr on document set it to req.RefundItems
+		// update refund info to database document
+		collection.FindOneAndUpdate(
+			context.Background(),
+			bson.M{
+				"invoiceNumber": req.InvoiceNumber,
+			},
+			bson.M{
+				"$set": bson.M{
+					"":       newRefundEvent,
+					"status": "refund",
+				},
+				"$push": bson.M{"invoiceEvent": newRefundEvent},
+			},
+			options.FindOneAndUpdate().SetProjection(bson.M{
+				"InvoiceNumber": 1,
+				"InvoiceTotal":  1,
+			}),
+		)
 	}
 }
