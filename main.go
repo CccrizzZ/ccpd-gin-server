@@ -12,7 +12,7 @@ import (
 	"github.com/cccrizzz/ccpd-gin-server/common/mongo"
 	"github.com/cccrizzz/ccpd-gin-server/pkg/contact"
 	"github.com/cccrizzz/ccpd-gin-server/pkg/invoices"
-	appointment "github.com/cccrizzz/ccpd-gin-server/pkg/pcontent"
+	pcontent "github.com/cccrizzz/ccpd-gin-server/pkg/pcontent"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -100,17 +100,23 @@ func main() {
 
 	// contact form controller
 	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
-	r.POST("/submitImages", azure.SubmitImages(azureClient))
-	r.POST("/GetImagesUrlsByTag", azure.GetImagesUrlsByTag(azureClient))
+	// r.POST("/submitImages", azure.SubmitImages(azureClient))
+	r.POST("/submitImages", contact.SubmitImages(spaceObjectStorageClient))
+	// r.POST("/GetImagesUrlsByTag", azure.GetImagesUrlsByTag(azureClient))
+	r.POST("/GetImagesUrlsByTag", contact.GetImagesUrlsByTag(spaceObjectStorageClient))
 	r.POST("/getContactFormByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.GetContactFormByPage(contactMessegesCollection))
 	r.POST("/setContactFormReplied", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.SetContactFormReplied(contactMessegesCollection))
 
 	// page content controller
-	r.GET("/getPageContent", appointment.GetPageContent(pageContenCollection))
-	r.POST("/setPageContent", auth.FirebaseAuthMiddleware(firebaseAuthClient), appointment.SetPageContent(pageContenCollection))
+	r.GET("/getPageContent", pcontent.GetPageContent(pageContenCollection))
+	r.POST("/setPageContent", auth.FirebaseAuthMiddleware(firebaseAuthClient), pcontent.SetPageContent(pageContenCollection))
 	r.GET("./getAssetsUrlArr", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.GetAssetsUrlArr(azureClient))
 	r.POST("./uploadPageContentAssets", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.UploadPageContentAssets(azureClient))
 	r.DELETE("./deletePageContentAsset", auth.FirebaseAuthMiddleware(firebaseAuthClient), azure.DeletePageContentAsset(azureClient))
+	// digital ocean object store
+	r.GET("./getAllAssetsUrlArr", auth.FirebaseAuthMiddleware(firebaseAuthClient), pcontent.GetAllAssetsUrlArr(spaceObjectStorageClient))
+	r.PUT("./uploadPageAsset", auth.FirebaseAuthMiddleware(firebaseAuthClient), pcontent.UploadPageAsset(spaceObjectStorageClient))
+	r.DELETE("./deleteAssetByName", auth.FirebaseAuthMiddleware(firebaseAuthClient), pcontent.DeleteAssetByName(spaceObjectStorageClient))
 
 	// invoices controller
 	r.POST("/getInvoicesByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetInvoicesByPage(invoicesCollection))

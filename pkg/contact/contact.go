@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	"github.com/minio/minio-go/v7"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -106,6 +107,116 @@ func SubmitContactForm(collection *mongo.Collection) gin.HandlerFunc {
 
 		// return json data
 		c.JSON(http.StatusOK, gin.H{"data": "Successfully Submitted Form"})
+	}
+}
+
+// warranty form images
+func SubmitImages(storageClient *minio.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		form, err := c.MultipartForm()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// get invoice number and lot
+		invoice := strings.ReplaceAll(form.Value["invoice"][0], " ", "")
+		lot := strings.ReplaceAll(form.Value["lot"][0], " ", "")
+		lot = strings.ReplaceAll(lot, ".", "")
+
+		// check if bucket exist
+		bucketName := "258-contact-image"
+		exists, existErr := storageClient.BucketExists(ctx, bucketName)
+		if existErr != nil || !exists {
+			c.String(500, "No Such Bucket")
+			return
+		}
+
+		for name, files := range form.File {
+			for _, fileHeader := range files {
+				if fileHeader.Size > 6*1024*1024 {
+					c.String(http.StatusBadRequest, "File Size Must Not Exceed 6 MB")
+					break
+				}
+
+				// open file
+				file, err := fileHeader.Open()
+				if err != nil {
+					fmt.Println("Cannot Open File:", err)
+					file.Close()
+				}
+				defer file.Close()
+
+				// upload pdf file to space object storage
+				_, uploadErr := storageClient.PutObject(
+					ctx,
+					bucketName,
+					lot+"_"+invoice+"_"+name,
+					file,
+					fileHeader.Size,
+					minio.PutObjectOptions{
+						ContentType: fileHeader.Header.Get("Content-Type"),
+						UserMetadata: map[string]string{
+							"x-amz-acl": "public-read",
+						},
+					},
+				)
+				if uploadErr != nil {
+					c.String(500, "Failed to Upload %s", uploadErr.Error())
+					return
+				}
+			}
+		}
+		c.String(200, "Successfully Uploaded Images!")
+	}
+}
+
+func GetImagesUrlsByTag(storageClient *minio.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+
+		var req struct {
+			InvoiceNumber string
+			Lot           string
+		}
+
+		// https://258-contact-image.nyc3.cdn.digitaloceanspaces.com/
+		// 123_123123_HIBID%20(6).jpg
+		bucketName := "crm-258-storage"
+		// check if bucket exist in object storage
+		exists, existErr := storageClient.BucketExists(ctx, bucketName)
+		if existErr != nil || !exists {
+			// fmt.Println(existErr.Error())
+			c.String(500, "No Such Bucket")
+			return
+		}
+
+		// list all objects make array of urls
+		var urlArr []string
+		for object := range storageClient.ListObjects(
+			ctx,
+			bucketName,
+			minio.ListObjectsOptions{
+				Recursive: true,
+				Prefix:    req.Lot + "_" + req.InvoiceNumber,
+			},
+		) {
+			presignedURL, err := storageClient.PresignedGetObject(
+				ctx,
+				bucketName,
+				object.Key,
+				time.Hour*2,
+				nil,
+			)
+			if err != nil {
+				fmt.Println(err.Error())
+				c.String(500, "Error Getting Objects")
+				return
+			}
+			urlArr = append(urlArr, presignedURL.String())
+		}
+		c.JSON(200, gin.H{"data": urlArr})
 	}
 }
 
