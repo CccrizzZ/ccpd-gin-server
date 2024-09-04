@@ -3,10 +3,10 @@ package invoices
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"mime/multipart"
 	"net/http"
@@ -27,8 +27,12 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var timeFormat string = "2006-01-02T15:04:05Z07:00"
-var invoiceTimeFormat = "2006-01-02 15:04:05 -0700 MST"
+// var timeFormat string = "2006-01-02T15:04:05Z07:00"
+var invoiceTimeFormat string = "2006-01-02 15:04:05 -0700 MST"
+
+// bucket names
+var signatureBucket string = "258-signatures"
+var invoiceBucket string = "258-invoices"
 
 func roundFloat(val float64, precision uint) float64 {
 	ratio := math.Pow(10, float64(precision))
@@ -78,7 +82,7 @@ type InvoiceItem struct {
 
 // upload single invoice pdf to digital ocean space object storage
 // defaultting the CDN link to public viewable
-func UploadInvoice(
+func UploadToSpace(
 	ctx context.Context,
 	storageClient *minio.Client,
 	bucket string,
@@ -100,12 +104,12 @@ func UploadInvoice(
 		},
 	)
 	if uploadErr != nil {
-		log.Fatal(uploadErr)
+		fmt.Println(uploadErr)
 	}
 
 	// construct CDN url
-	cdnURL := fmt.Sprintf("https://%s.%s/%s/%s", "crm-258-storage", "nyc3.cdn.digitaloceanspaces.com", uploaded.Bucket, uploaded.Key)
-	fmt.Println(cdnURL)
+	cdnURL := fmt.Sprintf("https://%s.%s/%s", bucket, "nyc3.cdn.digitaloceanspaces.com", uploaded.Key)
+	// fmt.Println(cdnURL)
 	return cdnURL
 }
 
@@ -550,6 +554,7 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, collection *mongo.Collect
 		toUpload, err := strconv.ParseBool(uploadPDF)
 		if err != nil {
 			c.String(http.StatusBadRequest, "No Upload PDF Option Passed")
+			return
 		}
 
 		// remove header and footer
@@ -593,12 +598,12 @@ func CreateInvoiceFromPDF(storageClient *minio.Client, collection *mongo.Collect
 				// upload invoice to space object storage if uploadPDF in form is true
 				if toUpload {
 					// check if bucket exist
-					exists, existErr := storageClient.BucketExists(ctx, "Invoices")
+					exists, existErr := storageClient.BucketExists(ctx, invoiceBucket)
 					if existErr != nil || !exists {
 						c.String(http.StatusInternalServerError, "No Such Bucket")
 						return
 					}
-					cdnLink = UploadInvoice(ctx, storageClient, "Invoices", file, fileHeader)
+					cdnLink = UploadToSpace(ctx, storageClient, invoiceBucket, file, fileHeader)
 				}
 
 				// create temp file from buffer
@@ -799,41 +804,102 @@ func DeleteInvoice(collection *mongo.Collection) gin.HandlerFunc {
 	}
 }
 
+var requestBody struct {
+	Image string `json:"image"`
+}
+
 func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.Background()
-		// get files from form
-		form, err := c.MultipartForm()
-		if err != nil {
-			fmt.Println("Cannot Open File:", err)
-			c.String(http.StatusBadRequest, "Invalid Body")
+
+		// Decode JSON body
+		if err := c.BindJSON(&requestBody); err != nil {
+			fmt.Println(err.Error())
+			c.JSON(400, gin.H{"error": "Invalid request payload"})
 			return
 		}
-		invoiceNumber := form.Value["invoiceNumber"]
-		files := form.File["signature"]
+
+		// Decode Base64 image data
+		imageData, err2 := base64.StdEncoding.DecodeString(requestBody.Image)
+		if err2 != nil {
+			fmt.Println(err2.Error())
+			c.JSON(400, gin.H{"error": "Failed to decode Base64 image"})
+			return
+		}
+
+		imageBuffer := bytes.NewBuffer(imageData)
+		fmt.Println("imageData:")
+		fmt.Println(imageData)
+
+		fmt.Println("BUF LEN:")
+		fmt.Println(int64(imageBuffer.Len()))
+
+		// get filename from path parameters
+		invoiceNumber := c.Param("nom")
+
+		// get files from form
+		// form, err := c.MultipartForm()
+		// if err != nil {
+		// 	fmt.Println("Cannot Open File:", err)
+		// 	// Cannot Open File: request Content-Type isn't multipart/form-data
+		// 	c.String(http.StatusBadRequest, "Invalid Body")
+		// 	return
+		// }
+
+		// sig := c.Request.FormValue("signature")
+		// invoiceNumber := c.Request.FormValue("invoiceNumber")
+
+		// fmt.Println(sig)
+		// fmt.Println(invoiceNumber)
+
+		// invoiceNumber := form.Value["invoiceNumber"]
+		// files := form.File["signature"]
+		// c.String(200, "OK")
+		// return
 
 		// loop through all files
-		var cdnLink string
-		for _, image := range files {
-			fh, err := image.Open()
-			if err != nil {
-				fmt.Println("Cannot Open File:", err)
-				c.String(http.StatusBadRequest, "Invalid Body")
-				fh.Close()
-				return
-			}
-			image.Filename = invoiceNumber[0] + "_sig"
+		// var cdnLink string
+		// for _, image := range files {
+		// 	fh, err := image.Open()
+		// 	if err != nil {
+		// 		fmt.Println("Cannot Open File:", err)
+		// 		c.String(http.StatusBadRequest, "Invalid Body")
+		// 		fh.Close()
+		// 		return
+		// 	}
+		// 	image.Filename = invoiceNumber[0] + "_sig"
 
-			// check if bucket exist in object storage
-			exists, existErr := storageClient.BucketExists(ctx, "Signatures")
-			if existErr != nil || !exists {
-				c.String(http.StatusInternalServerError, "No Such Bucket")
-				return
-			}
+		// 	// check if bucket exist in object storage
+		// 	exists, existErr := storageClient.BucketExists(ctx, signatureBucket)
+		// 	if existErr != nil || !exists {
+		// 		c.String(http.StatusInternalServerError, "No Such Bucket")
+		// 		return
+		// 	}
 
-			// upload to digital ocean
-			cdnLink = UploadInvoice(ctx, storageClient, "Signatures", fh, image)
+		// 	// upload to digital ocean
+		// 	cdnLink = UploadToSpace(ctx, storageClient, signatureBucket, fh, image)
+		// }
+
+		// put object into digital ocean space storage
+		uploaded, uploadErr := storageClient.PutObject(
+			ctx,
+			signatureBucket,
+			invoiceNumber+"_sig.png",
+			imageBuffer,
+			int64(imageBuffer.Len()),
+			minio.PutObjectOptions{
+				ContentType: "image/png",
+				UserMetadata: map[string]string{
+					"x-amz-acl": "public-read",
+				},
+			},
+		)
+		if uploadErr != nil {
+			fmt.Println(uploadErr)
 		}
+
+		// construct CDN url
+		cdnURL := fmt.Sprintf("https://%s.%s/%s", signatureBucket, "nyc3.digitaloceanspaces.com", uploaded.Key)
 
 		// add signature event to invoice event
 		now := time.Now()
@@ -848,7 +914,7 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		collection.UpdateOne(
 			ctx,
 			bson.M{
-				"invoiceNumber": invoiceNumber[0],
+				"invoiceNumber": invoiceNumber,
 			},
 			bson.M{
 				"$push": bson.M{
@@ -856,12 +922,12 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 				},
 				"$set": bson.M{
 					"status":       "pickedup",
-					"signatureCdn": cdnLink,
+					"signatureCdn": cdnURL,
 				},
 			},
 		)
 
-		c.String(200, cdnLink)
+		c.String(200, cdnURL)
 	}
 }
 
@@ -892,7 +958,7 @@ func DeleteSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		fileName := path.Base(urlPath)
 
 		// remove from object storage
-		deleteErr := storageClient.RemoveObject(ctx, "Signatures", fileName, minio.RemoveObjectOptions{})
+		deleteErr := storageClient.RemoveObject(ctx, signatureBucket, fileName, minio.RemoveObjectOptions{})
 		if deleteErr != nil {
 			fmt.Println(deleteErr.Error())
 			return
@@ -1281,7 +1347,8 @@ func GetChartData(collection *mongo.Collection) gin.HandlerFunc {
 			var result Invoice
 			err := curs.Decode(&result)
 			if err != nil {
-				log.Fatal(err)
+				fmt.Println(err)
+				return
 			}
 
 			// determine invoice month

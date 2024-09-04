@@ -94,18 +94,18 @@ func GetAllAssetsUrlArr(storageClient *minio.Client) gin.HandlerFunc {
 		}
 
 		// list all objects
-		prefix := "258Assets/"
+		// prefix := "258Assets/"
 		for object := range storageClient.ListObjects(
 			ctx,
 			bucketName,
 			minio.ListObjectsOptions{
 				Recursive: true,
-				Prefix:    prefix,
+				// Prefix:    prefix,
 			},
 		) {
-			if object.Key == prefix {
-				continue
-			}
+			// if object.Key == prefix {
+			// 	continue
+			// }
 			presignedURL, err := storageClient.PresignedGetObject(
 				ctx,
 				bucketName,
@@ -159,7 +159,7 @@ func UploadPageAsset(storageClient *minio.Client) gin.HandlerFunc {
 			_, uploadErr := storageClient.PutObject(
 				ctx,
 				bucketName,
-				"258Assets/"+file.Filename,
+				file.Filename,
 				fh,
 				file.Size,
 				minio.PutObjectOptions{
@@ -190,11 +190,11 @@ func DeleteAssetByName(storageClient *minio.Client) gin.HandlerFunc {
 			return
 		}
 
-		fmt.Println(req.FileName)
+		// fmt.Println(req.FileName)
 		storageClient.RemoveObject(
 			context.TODO(),
 			"crm-258-storage",
-			"258Assets/"+req.FileName,
+			req.FileName,
 			minio.RemoveObjectOptions{},
 		)
 

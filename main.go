@@ -35,6 +35,7 @@ func main() {
 	mongoClient := mongo.InitMongo()
 	contactMessegesCollection := mongoClient.Database("CCPD").Collection("ContactMesseges")
 	pageContenCollection := mongoClient.Database("CCPD").Collection("PageContent")
+	// invoicesCollection := mongoClient.Database("CCPD").Collection("Invoices")
 	invoicesCollection := mongoClient.Database("CCPD").Collection("Invoices_Production")
 	remainingCollection := mongoClient.Database("CCPD").Collection("RemainingHistory")
 
@@ -125,7 +126,7 @@ func main() {
 	r.POST("/updateInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.UpdateInvoice(invoicesCollection))
 	r.POST("/createInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.CreateInvoice(invoicesCollection))
 	r.DELETE("/deleteInvoice", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.DeleteInvoice(invoicesCollection))
-	r.POST("/uploadSignature", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.UploadSignature(spaceObjectStorageClient, invoicesCollection))
+	r.PUT("/uploadSignature/:nom", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.UploadSignature(spaceObjectStorageClient, invoicesCollection))
 	r.GET("/getAllInvoiceLot", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetAllInvoiceLot(invoicesCollection))
 	r.GET("/getChartData", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.GetChartData(invoicesCollection))
 	r.POST("/confirmSignature", auth.FirebaseAuthMiddleware(firebaseAuthClient), invoices.ConfirmSignature(invoicesCollection))
