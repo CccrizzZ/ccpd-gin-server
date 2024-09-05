@@ -1553,3 +1553,40 @@ func RefundInvoice(collection *mongo.Collection) gin.HandlerFunc {
 		)
 	}
 }
+
+func SearchSignatureByInvoice(storageClient *minio.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		var req struct {
+			InvoiceNumber string `json:"invoiceNumber"`
+		}
+		err := c.ShouldBindJSON(&req)
+		if err != nil {
+			c.String(400, "Invalid Body %s", err.Error())
+			return
+		}
+
+		fmt.Println(req.InvoiceNumber)
+
+		pickupSig := ""
+		returnSig := ""
+		bucketName := "258-signatures"
+		for object := range storageClient.ListObjects(
+			ctx,
+			bucketName,
+			minio.ListObjectsOptions{
+				Recursive: true,
+				Prefix:    req.InvoiceNumber,
+			},
+		) {
+			if strings.Contains(object.Key, "return") {
+				returnSig = fmt.Sprintf("https://cdn.yourdomain.com/%s/%s", bucketName, object.Key)
+			}
+			if strings.Contains(object.Key, "pickup") {
+				pickupSig = fmt.Sprintf("https://cdn.yourdomain.com/%s/%s", bucketName, object.Key)
+			}
+		}
+
+		c.JSON(200, gin.H{"pickup": pickupSig, "return": returnSig})
+	}
+}
