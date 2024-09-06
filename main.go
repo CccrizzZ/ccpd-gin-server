@@ -101,10 +101,12 @@ func main() {
 
 	// contact form controller
 	r.POST("/submitContactForm", contact.SubmitContactForm(contactMessegesCollection))
-	// r.POST("/submitImages", azure.SubmitImages(azureClient))
-	r.POST("/submitImages", contact.SubmitImages(spaceObjectStorageClient))
-	// r.POST("/GetImagesUrlsByTag", azure.GetImagesUrlsByTag(azureClient))
-	r.POST("/GetImagesUrlsByTag", contact.GetImagesUrlsByTag(spaceObjectStorageClient))
+	// azure image storage
+	r.POST("/submitImages", azure.SubmitImages(azureClient))
+	r.POST("/GetImagesUrlsByTag", azure.GetImagesUrlsByTag(azureClient))
+	// digital ocean space object storage
+	// r.POST("/submitImages", contact.SubmitImages(spaceObjectStorageClient))
+	// r.POST("/GetImagesUrlsByTag", contact.GetImagesUrlsByTag(spaceObjectStorageClient))
 	r.POST("/getContactFormByPage", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.GetContactFormByPage(contactMessegesCollection))
 	r.POST("/setContactFormReplied", auth.FirebaseAuthMiddleware(firebaseAuthClient), contact.SetContactFormReplied(contactMessegesCollection))
 

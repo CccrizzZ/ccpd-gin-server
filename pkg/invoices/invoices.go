@@ -41,9 +41,9 @@ func roundFloat(val float64, precision uint) float64 {
 
 type Invoice struct {
 	InvoiceNumber    string         `json:"invoiceNumber" bson:"invoiceNumber" binding:"required" validate:"required"`
-	Time             string         `json:"time" bson:"time" binding:"required" validate:"required"`
-	BuyerName        string         `json:"buyerName" bson:"buyerName" binding:"required" validate:"required"`
-	BuyerEmail       string         `json:"buyerEmail" bson:"buyerEmail" binding:"required" validate:"required"`
+	Time             string         `json:"time" bson:"time" validate:"required"`
+	BuyerName        string         `json:"buyerName" bson:"buyerName" validate:"required"`
+	BuyerEmail       string         `json:"buyerEmail" bson:"buyerEmail" validate:"required"`
 	BuyerAddress     string         `json:"buyerAddress" bson:"buyerAddress"`
 	ShippingAddress  string         `json:"shippingAddress" bson:"shippingAddress"`
 	BuyerPhone       string         `json:"buyerPhone" bson:"buyerPhone"`
@@ -80,6 +80,11 @@ type InvoiceItem struct {
 	HandlingFee   float32 `json:"handlingFee" bson:"handlingFee"`
 }
 
+func getCDN(bucket string, fileName string) string {
+	cdn := fmt.Sprintf("https://%s.%s/%s", bucket, "nyc3.cdn.digitaloceanspaces.com", fileName)
+	return cdn
+}
+
 // upload single invoice pdf to digital ocean space object storage
 // defaultting the CDN link to public viewable
 func UploadToSpace(
@@ -108,7 +113,7 @@ func UploadToSpace(
 	}
 
 	// construct CDN url
-	cdnURL := fmt.Sprintf("https://%s.%s/%s", bucket, "nyc3.cdn.digitaloceanspaces.com", uploaded.Key)
+	cdnURL := getCDN(bucket, uploaded.Key)
 	// fmt.Println(cdnURL)
 	return cdnURL
 }
@@ -701,9 +706,17 @@ func UpdateInvoice(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
+		fmt.Println(newInvoice)
+
 		// in, err := strconv.ParseInt(newInvoice.InvoiceNumber, 0, 32)
 		// if err != nil {
 		// 	c.String(400, "Cannot Convert Invoice Number to Int")
+		// }
+
+		// invNum, err := strconv.Atoi(newInvoice.InvoiceNumber)
+		// if err != nil {
+		// 	c.String(http.StatusBadRequest, "Invalid Body, %s", err.Error())
+		// 	return
 		// }
 
 		// find and update
@@ -711,8 +724,9 @@ func UpdateInvoice(collection *mongo.Collection) gin.HandlerFunc {
 			ctx,
 			bson.M{
 				"auctionLot": newInvoice.AuctionLot,
-				"buyerName":  newInvoice.BuyerName,
-				"time":       newInvoice.Time,
+				// "buyerName":  newInvoice.BuyerName,
+				// "time":       newInvoice.Time,
+				"invoiceNumber": newInvoice.InvoiceNumber,
 			},
 			bson.M{"$set": newInvoice},
 			options.FindOneAndUpdate().SetReturnDocument(options.After),
@@ -805,7 +819,8 @@ func DeleteInvoice(collection *mongo.Collection) gin.HandlerFunc {
 }
 
 var requestBody struct {
-	Image string `json:"image"`
+	Image  string `json:"image"`
+	NewNum string `json:"newNum"`
 }
 
 func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) gin.HandlerFunc {
@@ -828,9 +843,6 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		}
 
 		imageBuffer := bytes.NewBuffer(imageData)
-		fmt.Println("imageData:")
-		fmt.Println(imageData)
-
 		fmt.Println("BUF LEN:")
 		fmt.Println(int64(imageBuffer.Len()))
 
@@ -910,22 +922,40 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 			Time:  formattedTime,
 		}
 
-		// update information to invoice document
-		collection.UpdateOne(
-			ctx,
-			bson.M{
-				"invoiceNumber": invoiceNumber,
-			},
-			bson.M{
-				"$push": bson.M{
-					"invoiceEvent": newEvent,
+		// get the invoice number ({invoiceNumber}_{action})
+		split := strings.Split(invoiceNumber, "_")
+		fmt.Printf("Invoice: %s", split[0])
+
+		// create new invoice
+		if requestBody.NewNum != "" {
+			// create new invoice
+			var newInvoice Invoice = Invoice{
+				InvoiceNumber: split[0],
+				Status:        split[1],
+				SignatureCdn:  cdnURL,
+				InvoiceEvent:  []InvoiceEvent{newEvent},
+			}
+
+			// insert new document
+			collection.InsertOne(ctx, newInvoice, nil)
+		} else {
+			// update information to existing invoice document
+			collection.UpdateOne(
+				ctx,
+				bson.M{
+					"invoiceNumber": split[0],
 				},
-				"$set": bson.M{
-					"status":       "pickedup",
-					"signatureCdn": cdnURL,
+				bson.M{
+					"$push": bson.M{
+						"invoiceEvent": newEvent,
+					},
+					"$set": bson.M{
+						"status":       "pickedup",
+						"signatureCdn": cdnURL,
+					},
 				},
-			},
-		)
+			)
+		}
 
 		c.String(200, cdnURL)
 	}
@@ -1566,8 +1596,6 @@ func SearchSignatureByInvoice(storageClient *minio.Client) gin.HandlerFunc {
 			return
 		}
 
-		fmt.Println(req.InvoiceNumber)
-
 		pickupSig := ""
 		returnSig := ""
 		bucketName := "258-signatures"
@@ -1580,13 +1608,12 @@ func SearchSignatureByInvoice(storageClient *minio.Client) gin.HandlerFunc {
 			},
 		) {
 			if strings.Contains(object.Key, "return") {
-				returnSig = fmt.Sprintf("https://cdn.yourdomain.com/%s/%s", bucketName, object.Key)
+				returnSig = getCDN(bucketName, object.Key)
 			}
 			if strings.Contains(object.Key, "pickup") {
-				pickupSig = fmt.Sprintf("https://cdn.yourdomain.com/%s/%s", bucketName, object.Key)
+				pickupSig = getCDN(bucketName, object.Key)
 			}
 		}
-
 		c.JSON(200, gin.H{"pickup": pickupSig, "return": returnSig})
 	}
 }
