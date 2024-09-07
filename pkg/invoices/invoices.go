@@ -59,6 +59,7 @@ type Invoice struct {
 	IsShipping       bool           `json:"isShipping" bson:"isShipping"`
 	BuyersPremium    float32        `json:"buyersPremium" bson:"buyersPremium"`
 	SignatureCdn     string         `json:"signatureCdn" bson:"signatureCdn"`
+	ReturnSigCdn     string         `json:"returnSigCdn" bson:"returnSigCdn"`
 	InvoiceCdn       string         `json:"invoiceCdn" bson:"invoiceCdn"`
 }
 
@@ -842,12 +843,13 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 			return
 		}
 
+		// create buffer for decoded image data
 		imageBuffer := bytes.NewBuffer(imageData)
-		fmt.Println("BUF LEN:")
-		fmt.Println(int64(imageBuffer.Len()))
+		// fmt.Println("BUF LEN:")
+		// fmt.Println(int64(imageBuffer.Len()))
 
 		// get filename from path parameters
-		invoiceNumber := c.Param("nom")
+		fileName := c.Param("nom")
 
 		// get files from form
 		// form, err := c.MultipartForm()
@@ -896,7 +898,7 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		uploaded, uploadErr := storageClient.PutObject(
 			ctx,
 			signatureBucket,
-			invoiceNumber+"_sig.png",
+			fileName+"_sig.png",
 			imageBuffer,
 			int64(imageBuffer.Len()),
 			minio.PutObjectOptions{
@@ -916,14 +918,25 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		// add signature event to invoice event
 		now := time.Now()
 		formattedTime := now.Format(invoiceTimeFormat)
-		newEvent := InvoiceEvent{
-			Title: "Pickup Signature",
-			Desc:  "Customer signed and picked up",
-			Time:  formattedTime,
+
+		// custome invoice event to pickup or return
+		var newEvent InvoiceEvent
+		if requestBody.NewNum != "" {
+			newEvent = InvoiceEvent{
+				Title: "Pickup Signature",
+				Desc:  "Customer signed and picked up",
+				Time:  formattedTime,
+			}
+		} else {
+			newEvent = InvoiceEvent{
+				Title: "Return Signature",
+				Desc:  "Customer returned",
+				Time:  formattedTime,
+			}
 		}
 
 		// get the invoice number ({invoiceNumber}_{action})
-		split := strings.Split(invoiceNumber, "_")
+		split := strings.Split(fileName, "_")
 		fmt.Printf("Invoice: %s", split[0])
 
 		// create new invoice
@@ -932,7 +945,7 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 			var newInvoice Invoice = Invoice{
 				InvoiceNumber: split[0],
 				Status:        split[1],
-				SignatureCdn:  cdnURL,
+				ReturnSigCdn:  cdnURL,
 				InvoiceEvent:  []InvoiceEvent{newEvent},
 			}
 
@@ -965,6 +978,7 @@ type DeleteSignatureReq struct {
 	InvoiceNumber string `json:"invoiceNumber" bson:"invoiceNumber"`
 	BuyerName     string `json:"buyerName" bson:"buyerName"`
 	CDNLink       string `json:"cdnLink" bson:"cdnLink"`
+	Action        string `json:"action" bson:"action"`
 }
 
 func DeleteSignature(storageClient *minio.Client, collection *mongo.Collection) gin.HandlerFunc {
@@ -985,13 +999,29 @@ func DeleteSignature(storageClient *minio.Client, collection *mongo.Collection) 
 			return
 		}
 		urlPath := parsedURL.Path
-		fileName := path.Base(urlPath)
+		fileName := path.Base(urlPath) + request.Action
 
 		// remove from object storage
 		deleteErr := storageClient.RemoveObject(ctx, signatureBucket, fileName, minio.RemoveObjectOptions{})
 		if deleteErr != nil {
 			fmt.Println(deleteErr.Error())
 			return
+		}
+
+		// remove databse link according to type of signature
+		var setObj = bson.M{}
+		if request.Action == "pickup" {
+			setObj = bson.M{
+				"$set": bson.M{
+					"signatureCdn": nil,
+				},
+			}
+		} else {
+			setObj = bson.M{
+				"$set": bson.M{
+					"returnCdn": nil,
+				},
+			}
 		}
 
 		// delete cdn link from invoice
@@ -1001,11 +1031,7 @@ func DeleteSignature(storageClient *minio.Client, collection *mongo.Collection) 
 				"invoiceNumber": request.InvoiceNumber,
 				"buyerName":     request.BuyerName,
 			},
-			bson.M{
-				"$set": bson.M{
-					"signatureCdn": nil,
-				},
-			},
+			setObj,
 			nil,
 		)
 
@@ -1499,7 +1525,7 @@ func VerifyInvoiceNumber(collection *mongo.Collection) gin.HandlerFunc {
 			return
 		}
 
-		// pull from database
+		// pull invoice from database
 		var responseData VerifyRes
 		if req.InvoiceNumber != "" {
 			err := collection.FindOne(
@@ -1508,6 +1534,7 @@ func VerifyInvoiceNumber(collection *mongo.Collection) gin.HandlerFunc {
 				options.FindOne().SetProjection(bson.M{"buyerName": 1, "invoiceNumber": 1}),
 			).Decode(&responseData)
 			if err != nil {
+				fmt.Println(err.Error())
 				c.String(500, "Cannot Decode Record")
 				return
 			}
