@@ -59,7 +59,9 @@ type Invoice struct {
 	IsShipping       bool           `json:"isShipping" bson:"isShipping"`
 	BuyersPremium    float32        `json:"buyersPremium" bson:"buyersPremium"`
 	SignatureCdn     string         `json:"signatureCdn" bson:"signatureCdn"`
+	PickupTime       string         `json:"pickupTime" bson:"pickupTime"`
 	ReturnSigCdn     string         `json:"returnSigCdn" bson:"returnSigCdn"`
+	ReturnTime       string         `json:"returnTime" bson:"returnTime"`
 	InvoiceCdn       string         `json:"invoiceCdn" bson:"invoiceCdn"`
 }
 
@@ -822,6 +824,7 @@ func DeleteInvoice(collection *mongo.Collection) gin.HandlerFunc {
 var requestBody struct {
 	Image  string `json:"image"`
 	NewNum string `json:"newNum"`
+	NewLot string `json:"newLot"`
 }
 
 func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) gin.HandlerFunc {
@@ -851,54 +854,16 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		// get filename from path parameters
 		fileName := c.Param("nom")
 
-		// get files from form
-		// form, err := c.MultipartForm()
-		// if err != nil {
-		// 	fmt.Println("Cannot Open File:", err)
-		// 	// Cannot Open File: request Content-Type isn't multipart/form-data
-		// 	c.String(http.StatusBadRequest, "Invalid Body")
-		// 	return
-		// }
+		// split the file name for invoice number and action ({invoiceNumber}_{action})
+		split := strings.Split(fileName, "_")
+		// fmt.Printf("Invoice: %s", split[0])
 
-		// sig := c.Request.FormValue("signature")
-		// invoiceNumber := c.Request.FormValue("invoiceNumber")
-
-		// fmt.Println(sig)
-		// fmt.Println(invoiceNumber)
-
-		// invoiceNumber := form.Value["invoiceNumber"]
-		// files := form.File["signature"]
-		// c.String(200, "OK")
-		// return
-
-		// loop through all files
-		// var cdnLink string
-		// for _, image := range files {
-		// 	fh, err := image.Open()
-		// 	if err != nil {
-		// 		fmt.Println("Cannot Open File:", err)
-		// 		c.String(http.StatusBadRequest, "Invalid Body")
-		// 		fh.Close()
-		// 		return
-		// 	}
-		// 	image.Filename = invoiceNumber[0] + "_sig"
-
-		// 	// check if bucket exist in object storage
-		// 	exists, existErr := storageClient.BucketExists(ctx, signatureBucket)
-		// 	if existErr != nil || !exists {
-		// 		c.String(http.StatusInternalServerError, "No Such Bucket")
-		// 		return
-		// 	}
-
-		// 	// upload to digital ocean
-		// 	cdnLink = UploadToSpace(ctx, storageClient, signatureBucket, fh, image)
-		// }
-
+		uploadName := fileName + "_" + requestBody.NewLot + "_sig.png"
 		// put object into digital ocean space storage
 		uploaded, uploadErr := storageClient.PutObject(
 			ctx,
 			signatureBucket,
-			fileName+"_sig.png",
+			uploadName,
 			imageBuffer,
 			int64(imageBuffer.Len()),
 			minio.PutObjectOptions{
@@ -915,60 +880,57 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		// construct CDN url
 		cdnURL := fmt.Sprintf("https://%s.%s/%s", signatureBucket, "nyc3.digitaloceanspaces.com", uploaded.Key)
 
+		// fmt.Println(cdnURL)
 		// add signature event to invoice event
 		now := time.Now()
 		formattedTime := now.Format(invoiceTimeFormat)
 
 		// custome invoice event to pickup or return
-		var newEvent InvoiceEvent
-		if requestBody.NewNum != "" {
-			newEvent = InvoiceEvent{
-				Title: "Pickup Signature",
-				Desc:  "Customer signed and picked up",
-				Time:  formattedTime,
-			}
+		// var newEvent InvoiceEvent
+		// if requestBody.NewNum != "" {
+		// 	newEvent = InvoiceEvent{
+		// 		Title: "Pickup Signature",
+		// 		Desc:  "Customer signed and picked up",
+		// 		Time:  formattedTime,
+		// 	}
+		// } else {
+		// 	newEvent = InvoiceEvent{
+		// 		Title: "Return Signature",
+		// 		Desc:  "Customer returned",
+		// 		Time:  formattedTime,
+		// 	}
+		// }
+
+		// upsert information to database
+		updateOptions := options.Update().SetUpsert(true)
+		updateBson := bson.M{}
+
+		// if return add return else add signature
+		if split[1] == "pickup" {
+			updateBson["signatureCdn"] = cdnURL
+			updateBson["status"] = "pickedup"
+			updateBson["pickupTime"] = formattedTime
 		} else {
-			newEvent = InvoiceEvent{
-				Title: "Return Signature",
-				Desc:  "Customer returned",
-				Time:  formattedTime,
-			}
+			updateBson["returnSigCdn"] = cdnURL
+			updateBson["status"] = "refund"
+			updateBson["returnTime"] = formattedTime
 		}
 
-		// get the invoice number ({invoiceNumber}_{action})
-		split := strings.Split(fileName, "_")
-		fmt.Printf("Invoice: %s", split[0])
-
-		// create new invoice
-		if requestBody.NewNum != "" {
-			// create new invoice
-			var newInvoice Invoice = Invoice{
-				InvoiceNumber: split[0],
-				Status:        split[1],
-				ReturnSigCdn:  cdnURL,
-				InvoiceEvent:  []InvoiceEvent{newEvent},
-			}
-
-			// insert new document
-			collection.InsertOne(ctx, newInvoice, nil)
-		} else {
-			// update information to existing invoice document
-			collection.UpdateOne(
-				ctx,
-				bson.M{
-					"invoiceNumber": split[0],
-				},
-				bson.M{
-					"$push": bson.M{
-						"invoiceEvent": newEvent,
-					},
-					"$set": bson.M{
-						"status":       "pickedup",
-						"signatureCdn": cdnURL,
-					},
-				},
-			)
-		}
+		// push to db
+		collection.UpdateOne(
+			ctx,
+			bson.M{
+				"invoiceNumber": split[0],
+				"auctionLot":    requestBody.NewLot,
+			},
+			bson.M{
+				// "$push": bson.M{
+				// 	"invoiceEvent": newEvent,
+				// },
+				"$set": updateBson,
+			},
+			updateOptions,
+		)
 
 		c.String(200, cdnURL)
 	}
@@ -1065,10 +1027,10 @@ type InvoiceFilter struct {
 }
 
 type GetInvoiceRequest struct {
-	CurrPage     *int           `json:"currPage" binding:"required"`
-	ItemsPerPage *int           `json:"itemsPerPage" binding:"required"`
-	Filter       *InvoiceFilter `json:"filter" binding:"required"`
-	TimeOrder    *int           `json:"timeOrder" binding:"required"`
+	CurrPage     *int           `json:"currPage"`
+	ItemsPerPage *int           `json:"itemsPerPage"`
+	Filter       *InvoiceFilter `json:"filter"`
+	TimeOrder    *int           `json:"timeOrder"`
 }
 
 func GetInvoicesByPage(collection *mongo.Collection) gin.HandlerFunc {
