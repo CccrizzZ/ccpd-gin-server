@@ -13,9 +13,9 @@
 - crm-258-mobile-app
 ```
 
-## Start Debug Server
+## Start Debug Server (hot reload)
 ```
-go run main.go
+air
 ```
 
 ## Build Docker Image

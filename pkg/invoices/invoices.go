@@ -916,12 +916,19 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 			updateBson["returnTime"] = formattedTime
 		}
 
+		// convert lot to number
+		floatLot, err := strconv.ParseFloat(requestBody.NewLot, 64)
+		if err != nil {
+			c.String(200, "Cannot Convert Lot Number To Float")
+			return
+		}
+
 		// push to db
 		collection.UpdateOne(
 			ctx,
 			bson.M{
 				"invoiceNumber": split[0],
-				"auctionLot":    requestBody.NewLot,
+				"auctionLot":    floatLot,
 			},
 			bson.M{
 				// "$push": bson.M{
@@ -938,9 +945,10 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 
 type DeleteSignatureReq struct {
 	InvoiceNumber string `json:"invoiceNumber" bson:"invoiceNumber"`
-	BuyerName     string `json:"buyerName" bson:"buyerName"`
-	CDNLink       string `json:"cdnLink" bson:"cdnLink"`
-	Action        string `json:"action" bson:"action"`
+	// BuyerName     string `json:"buyerName" bson:"buyerName"`
+	AuctionLot string `json:"auctionLot" bson:"auctionLot"`
+	CDNLink    string `json:"cdnLink" bson:"cdnLink"`
+	Action     string `json:"action" bson:"action"`
 }
 
 func DeleteSignature(storageClient *minio.Client, collection *mongo.Collection) gin.HandlerFunc {
@@ -961,7 +969,7 @@ func DeleteSignature(storageClient *minio.Client, collection *mongo.Collection) 
 			return
 		}
 		urlPath := parsedURL.Path
-		fileName := path.Base(urlPath) + request.Action
+		fileName := path.Base(urlPath)
 
 		// remove from object storage
 		deleteErr := storageClient.RemoveObject(ctx, signatureBucket, fileName, minio.RemoveObjectOptions{})
@@ -975,15 +983,22 @@ func DeleteSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		if request.Action == "pickup" {
 			setObj = bson.M{
 				"$set": bson.M{
-					"signatureCdn": nil,
+					"signatureCdn": "",
 				},
 			}
 		} else {
 			setObj = bson.M{
 				"$set": bson.M{
-					"returnCdn": nil,
+					"returnSigCdn": "",
 				},
 			}
+		}
+
+		// get float auction lot
+		floatLot, err := strconv.ParseFloat(request.AuctionLot, 64)
+		if err != nil {
+			c.String(500, "Cannot Convert Lot Number To Float")
+			return
 		}
 
 		// delete cdn link from invoice
@@ -991,12 +1006,12 @@ func DeleteSignature(storageClient *minio.Client, collection *mongo.Collection) 
 			ctx,
 			bson.M{
 				"invoiceNumber": request.InvoiceNumber,
-				"buyerName":     request.BuyerName,
+				"auctionLot":    floatLot,
+				// "buyerName":     request.BuyerName,
 			},
 			setObj,
 			nil,
 		)
-
 	}
 }
 
