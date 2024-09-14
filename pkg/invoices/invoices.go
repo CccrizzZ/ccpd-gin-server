@@ -881,9 +881,15 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		cdnURL := fmt.Sprintf("https://%s.%s/%s", signatureBucket, "nyc3.digitaloceanspaces.com", uploaded.Key)
 
 		// convert time to local time (eastern)
-		// now := time.Now()
-		local := time.Now().Local()
-		formattedTime := local.Format(invoiceTimeFormat)
+		location, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			fmt.Println("Error loading location:", err)
+			c.String(200, "Error loading location")
+			return
+		}
+		now := time.Now()
+		easternTime := now.In(location)
+		formattedTime := easternTime.Format(invoiceTimeFormat)
 
 		// custome invoice event to pickup or return
 		// var newEvent InvoiceEvent
