@@ -57,7 +57,7 @@ func WsHandler(c *gin.Context) {
 	clients[clientID] = newClient
 	clientsMutex.Unlock()
 
-	fmt.Println(clients)
+	// fmt.Println(clients)
 
 	// the read message loop
 	for {

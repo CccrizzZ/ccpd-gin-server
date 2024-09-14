@@ -880,10 +880,10 @@ func UploadSignature(storageClient *minio.Client, collection *mongo.Collection) 
 		// construct CDN url
 		cdnURL := fmt.Sprintf("https://%s.%s/%s", signatureBucket, "nyc3.digitaloceanspaces.com", uploaded.Key)
 
-		// fmt.Println(cdnURL)
-		// add signature event to invoice event
-		now := time.Now()
-		formattedTime := now.Format(invoiceTimeFormat)
+		// convert time to local time (eastern)
+		// now := time.Now()
+		local := time.Now().Local()
+		formattedTime := local.Format(invoiceTimeFormat)
 
 		// custome invoice event to pickup or return
 		// var newEvent InvoiceEvent
