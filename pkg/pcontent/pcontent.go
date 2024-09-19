@@ -28,10 +28,11 @@ func GetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 		var result bson.M
 		err := collection.FindOne(
 			context.TODO(),
-			bson.M{"type": "setting"},
+			bson.M{},
 			nil,
 		).Decode(&result)
 		if err != nil {
+			fmt.Println(err.Error())
 			c.String(http.StatusNotFound, "Item Not Found!")
 			return
 		}
@@ -55,7 +56,7 @@ func SetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 		bindErr := c.ShouldBindJSON(&body)
 		if bindErr != nil {
 			fmt.Println(bindErr)
-			c.String(http.StatusBadRequest, "Please Check Your Inputs!")
+			c.String(404, "Please Check Your Inputs!")
 			return
 		}
 
@@ -70,7 +71,7 @@ func SetPageContent(collection *mongo.Collection) gin.HandlerFunc {
 			},
 		)
 		if err != nil {
-			c.String(http.StatusInternalServerError, "Cannot Update Document")
+			c.String(500, "Cannot Update Document")
 			return
 		}
 
